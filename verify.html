@@ -114,6 +114,9 @@ async function act(a, code, extra) {
       const j = await call({ action: 'a_comp_set', name, start, end: start + dur * unit, grace: +(f.cg != null ? f.cg : 15) });
       S.comp = j.comp; flash('Competition saved: ' + j.comp.name); return load();
     }
+    if (a === 'diag') { const j = await call({ action: 'a_diag' }); S.diag = j; return render(); }
+    if (a === 'diagclose') { S.diag = null; return render(); }
+    if (a === 'repair') { const j = await call({ action: 'a_repair' }); flash('Repaired ' + j.fixed + ' cells'); return act('diag'); }
     if (a === 'compclear') { if (!confirm('Remove the competition? Its scores stay in the sheet.')) return; const j = await call({ action: 'a_comp_clear' }); S.comp = j.comp; if (S.mode === 'contest') S.mode = 'rank'; flash('Competition removed'); return load(); }
     if (a === 'season') {
       const n = prompt('Name for a new leaderboard (the current one stays saved in the sheet):', '');
@@ -180,6 +183,22 @@ function card(r, rank, prize, open) {
   return `<div class="card${prize ? ' prize' : ''}"><div class="head" ${prize ? '' : `data-act="toggle" data-code="${esc(r.code)}"`}><div class="rank">${['🥇', '🥈', '🥉'][rank - 1] || (rank ? rank + '.' : '🔎')}</div>
   <div class="who"><b>${esc(r.name)}</b>${chips(r)}${prize && rank ? ` <span class="chip">Prize #${rank}</span>` : ''}</div><div class="score">${esc(r.score)}</div></div>${prize || open ? details(r, rank) : ''}</div>`;
 }
+function diagCard() {
+  const d = S.diag, MN = { rank: 'Rank', classic: 'Classic', rush: 'Rush', infinite: 'Infinite' }, L = [];
+  const where = `<a href="${esc(d.sheetUrl)}" target="_blank" rel="noopener">${esc(d.spreadsheet)}</a> → tab “${esc(d.sheetName)}”`;
+  if (!d.rows) L.push('⚠️ <b>No scores have reached this Sheet yet.</b> Players’ scores are not arriving. Check: (1) the game’s <code>API_URL</code> is the Web app address ending in <code>/exec</code>; (2) in the game, Settings → Check the server says the game and server match; (3) Deploy → Manage deployments → Who has access = Anyone; (4) you are looking at the Sheet named above (the one where <code>setup</code> was run).');
+  Object.keys(d.boards).forEach(m => {
+    const others = d.groups.filter(g => g.mode === m && g.season !== String(d.seasons[m]) && g.status !== 'VOID' && g.status !== 'TEST');
+    if (d.boards[m] > 0) L.push(`✅ <b>${MN[m]}</b>: the board shows season “${esc(d.seasons[m])}” with <b>${d.boards[m]}</b> player${d.boards[m] === 1 ? '' : 's'}.`);
+    else if (others.length) L.push(`⚠️ <b>${MN[m]}</b> is empty because the board shows season “${esc(d.seasons[m])}”, but the Sheet holds ${others.map(o => o.n + ' score' + (o.n === 1 ? '' : 's') + ' under “' + esc(o.season) + '”').join(', ')}. A new season or competition starts a fresh board; the older scores are safe in the Sheet.`);
+    else L.push(`ℹ️ <b>${MN[m]}</b>: no scores yet this season (“${esc(d.seasons[m])}”).`);
+  });
+  if (d.oddSeasons) L.push(`⚠️ <b>${d.oddSeasons} rows have a season that Google Sheets turned into a date or number</b> (for example a season named “10-15” or “2026-10”). The game now reads these correctly, but you can fix the cells for good: <button class="alt" data-act="repair">Repair now</button>`);
+  if (d.hidden.TEST || d.hidden.VOID) L.push(`ℹ️ Hidden on purpose: ${d.hidden.TEST} test row${d.hidden.TEST === 1 ? '' : 's'} (load test) and ${d.hidden.VOID} removed by staff.`);
+  if (d.compState !== 'none') L.push(`🏁 Competition “${esc(d.compName)}” is <b>${esc(d.compState)}</b>. ${d.compState === 'upcoming' ? 'Rank shows the normal weekly board until it starts.' : 'Rank shows its own board, and keeps showing the final standings after the deadline until you remove the competition.'}`);
+  if (d.recent.length) L.push('Newest scores in the Sheet: ' + d.recent.map(r => `${esc(r.name)} (${esc(MN[r.mode] || r.mode)}, ${esc(r.score)}, “${esc(r.season)}”${r.status && r.status !== 'OK' ? ', ' + esc(r.status) : ''})`).join('; '));
+  return `<div class="card"><h2>Leaderboard check</h2><p class="meta">Scores are stored in ${where} (${d.rows} rows). Server rules version ${esc(d.rules)}.</p>${L.map(x => `<p style="margin:8px 0">${x}</p>`).join('')}<div class="acts"><button class="alt" data-act="diag">Check again</button><button class="alt" data-act="diagclose">Close</button></div></div>`;
+}
 function connectScreen() {
   return `<div class="pad center"><h1>Rainbrew staff 🦄</h1><p class="meta">Connect this device once. Open the staff link the owner gave you, or paste the staff code below.</p>
   <input id="code" placeholder="Paste staff code or link" autocomplete="off"><p class="meta" style="color:var(--bad)">${esc(S.error)}</p><button data-act="connect">Connect</button></div>`;
@@ -188,6 +207,7 @@ function main() {
   const vis = visible(), q = S.q.trim();
   const prizeRows = q ? [] : vis.filter(v => v.rank <= S.prizes), rest = q ? vis : vis.filter(v => v.rank > S.prizes);
   return `<div class="top"><div><h1>Magic Catch staff</h1><div class="meta">${S.season ? esc(S.season) + (S.mode === 'contest' ? ' · contest results' : S.auto ? ' · automatic board' : ' · set by hand') + ' · ' : ''}${S.players} players${S.updated ? ' · updated ' + Math.max(0, Math.round((Date.now() - S.updated) / 1000)) + 's ago' : ''}</div></div><div class="acts" style="margin:0"><button class="alt" data-act="comp">🏁 Contest</button><button class="alt" data-act="refresh">${S.busy ? '…' : '⟳'}</button></div></div>
+  ${S.diag ? diagCard() : ''}
   ${S.toast ? `<div class="toast${S.bad ? ' bad' : ''}">${esc(S.toast)}</div>` : ''}${S.error ? `<div class="toast bad">${esc(S.error)}</div>` : ''}
   ${S.showComp ? compPanel() : ''}
   <div class="tabs">${MODES.concat(S.comp ? [['contest', '🏁 Results']] : []).map(([m, n]) => `<button class="tab${S.mode === m ? ' on' : ''}" data-act="mode" data-code="${m}">${n}</button>`).join('')}</div>
@@ -197,7 +217,7 @@ function main() {
   ${rest.length ? `<h2 style="margin-top:12px">${q ? 'Matches' : 'Everyone else'}</h2><div class="card">${rest.map(v => `<div class="row" data-act="toggle" data-code="${esc(v.r.code)}"><div class="rank">${v.rank}.</div><div class="who"><b>${esc(v.r.name)}</b>${chips(v.r)}</div><div class="score">${esc(v.r.score)}</div></div>${S.open[v.r.code] ? details(v.r, v.rank) : ''}`).join('')}</div>` : ''}
   ${!vis.length && !S.found && S.loaded ? `<div class="card center">${q ? 'No match. If you have a full code, type it in full.' : 'No scores yet this season.'}</div>` : ''}
   <div class="foot"><div class="acts"><button class="alt" data-act="prizes" data-code="-1">− prize</button><span class="meta center" style="align-self:center">Prizes for the top <b>${S.prizes}</b></span><button class="alt" data-act="prizes" data-code="1">+ prize</button></div>
-  <div class="acts"><button class="alt" data-act="csv">⬇ Winners list (CSV)</button><button class="alt" data-act="season">Start a new board</button>${S.auto ? '' : '<button class="alt" data-act="autoseason">Back to automatic</button>'}<button class="alt" data-act="disconnect">Disconnect this device</button></div></div>`;
+  <div class="acts"><button class="alt" data-act="diag">🔍 Why is a board empty?</button><button class="alt" data-act="csv">⬇ Winners list (CSV)</button><button class="alt" data-act="season">Start a new board</button>${S.auto ? '' : '<button class="alt" data-act="autoseason">Back to automatic</button>'}<button class="alt" data-act="disconnect">Disconnect this device</button></div></div>`;
 }
 function render() {
   const el = typeof document !== 'undefined' ? document.activeElement : null, keep = !!(el && el.id === 'q'), pos = keep ? el.selectionStart : 0;
