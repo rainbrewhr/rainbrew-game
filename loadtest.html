@@ -17,15 +17,15 @@ input{font:inherit;width:100%;padding:10px 12px;border-radius:10px;border:2px so
 <div class="card" id="out" hidden><div class="grid" id="stats"></div><p id="verdict"></p><p class="meta" id="note"></p></div>
 <script>
 'use strict';
-/* ===== RULES v5 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
-var RULES_VERSION = 5;
+/* ===== RULES v6 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
+var RULES_VERSION = 6;
 var POINTS = { f: 1, s: 2, p: 2, b: 3, c: 3, t: 4, m: 4 };           // fries, salad, pizza, burger, chicken, tea, matcha (normal rules: catch these)
 var GOODS = ['f', 'f', 's', 'p', 'p', 'b', 'c', 't', 'm'];
 var LOGO_PTS = 25, DBL_MS = 10000, MAGNET_MS = 8000, SLOW_MS = 5000, MAX_MULT = 8;
 var INV_MS = 1200;                                                    // safety window after a hit: further hits are ignored
 var GRACE_SECS = 6;                                                   // no hazards in the first 6 seconds
 var INF_PEN = 10, MIX_FROM = 12;
-var GOLD_X = 3, SEQ_BONUS = 40, WAVE_FROM = 12;                       // golden items score x3; "Order up!" bonus; first wave after 12s
+var GOLD_X = 3, SEQ_BONUS = 40, WAVE_FROM = 12, FLIP_SAFE_MS = 1000;   // after every day/night switch you cannot be hurt for 1 second (fair to everything already on screen)                       // golden items score x3; "Order up!" bonus; first wave after 12s
 var MIN_FALL = 0.25, MAX_FALL = 45;                                   // seconds an item may take from spawn to catch/miss
 // lvsec = seconds per level. Every stepLv levels the game gets one "speed step": +vstep px/s, items arrive faster and more are hazards.
 // flip = levels per day/night phase (Rank). mix = share of items that play by the opposite rules (they glow). wave = seconds between "moments".
@@ -47,6 +47,9 @@ function mulberry32(a) {
 function modeOf(mode) { return MODES[mode] || MODES.classic; }
 function levelAt(sec, mode) { return 1 + Math.floor(sec / modeOf(mode).lvsec); }
 function stepAt(lv, mode) { var M = modeOf(mode); return Math.min(M.maxStep, Math.floor((lv - 1) / M.stepLv)); }
+function flipLen(mode) { var M = modeOf(mode); return M.flip ? M.flip * M.lvsec : 0; }                         // seconds between day/night switches
+function nextFlipAt(sec, mode) { var P = flipLen(mode); return P ? (Math.floor(sec / P) + 1) * P : Infinity; }  // when the next switch happens
+function flipSafeAt(mode, tms) { var P = flipLen(mode) * 1000; return !!P && tms >= P && tms % P < FLIP_SAFE_MS; }
 function isNight(sec, mode) { var M = modeOf(mode); return !!M.flip && Math.floor((levelAt(sec, mode) - 1) / M.flip) % 2 === 1; }
 
 // Reversal: at night (flip modes) or for glowing items (mix modes) the rules swap.
@@ -116,7 +119,7 @@ function makeSchedule(seed, mode) {
 
 function newState(mode) {
   var M = modeOf(mode);
-  return { score: 0, combo: 0, maxCombo: 0, catches: 0, rev: 0, seqs: 0, golds: 0, sq: 0, sn: 0, lives: M.lives, shield: 0, dbl: -1, inv: -1, over: 0, inf: M.inf ? 1 : 0 };
+  return { score: 0, combo: 0, maxCombo: 0, catches: 0, rev: 0, seqs: 0, golds: 0, hits: 0, blocked: 0, sq: 0, sn: 0, flipP: flipLen(mode) * 1000, lives: M.lives, shield: 0, dbl: -1, inv: -1, over: 0, inf: M.inf ? 1 : 0 };
 }
 
 // t = integer game-time ms, a = 'c' caught something good | 'x' touched a hazard | 'm' a scoring item fell past
@@ -125,9 +128,11 @@ function applyEvent(S, t, a, k, gh, it) {
   var d = S.dbl >= t ? 2 : 1, mult, g = it && it.gd ? GOLD_X : 1;
   if (a === 'm') { S.combo = 0; if (it && it.sq && S.sq === it.sq) S.sq = 0; return; }
   if (a === 'x') {
+    if (S.flipP && t >= S.flipP && t % S.flipP < FLIP_SAFE_MS) return;  // the first second after a day/night switch is a safe window
     if (S.inv >= t) return;                                           // still in the safety window after the last hit
     S.inv = t + INV_MS;
-    if (S.shield) { S.shield = 0; return; }
+    if (S.shield) { S.shield = 0; S.blocked++; return; }
+    S.hits++;
     if (S.inf) { S.score = Math.max(0, S.score - INF_PEN); S.combo = 0; return; }   // Infinite: no lives, a hit costs points
     S.lives--; S.combo = 0; if (S.lives <= 0) S.over = 1;             // there is no way to win a life back
     return;
