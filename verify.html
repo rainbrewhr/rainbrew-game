@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Rainbrew Magic Catch | Staff verification</title>
+<!-- Staff-only page. It needs the ADMIN_KEY from your Apps Script project. Do not share the key with players. -->
+<style>
+:root{--ink:#3d2566;--bg:#f6f1ff;--card:#fff;--line:#e2d6fb;--btn:#7b4bb8;--ok:#1f8a57;--warn:#b45309;--bad:#b42318}
+@media (prefers-color-scheme:dark){:root{--ink:#f3e8ff;--bg:#1d1433;--card:#2a1d49;--line:#46336f;--btn:#a78bfa;--ok:#6ee7a8;--warn:#fdba74;--bad:#fca5a5}}
+*{box-sizing:border-box}body{margin:0;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink);padding:16px;padding-bottom:40px}
+main{max-width:980px;margin:0 auto}h1{font-size:1.5rem;margin:0 0 4px}h2{font-size:1.1rem;margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin:12px 0}
+label{display:block;font-size:.85rem;margin:6px 0 2px}
+input,select{font:inherit;padding:9px 12px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink);width:100%}
+button{font:inherit;font-weight:700;padding:9px 16px;border-radius:10px;border:0;background:var(--btn);color:#fff;cursor:pointer}
+button.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}button.bad{background:var(--bad);color:#fff}button:disabled{opacity:.5}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--btn);outline-offset:2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}.row>*{flex:1 1 140px}
+.tablewrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.92rem}th,td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{font-size:.8rem;opacity:.75}
+td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}code{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:700}
+.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.78rem;font-weight:700;border:1px solid var(--line)}.OK{color:var(--ok)}.CLAIMED{color:var(--btn)}.REVIEW{color:var(--warn);border-color:var(--warn)}.LOW{color:var(--ok)}.VOID{color:var(--bad);border-color:var(--bad)}
+.msg{min-height:1.3em;margin:6px 0;font-size:.92rem}.err{color:var(--bad)}.good{color:var(--ok)}.meta{font-size:.82rem;opacity:.8}
+.result{border:2px solid var(--btn);border-radius:14px;padding:12px;margin-top:10px}.result .big{font-size:1.5rem;font-weight:800}
+</style></head><body><main>
+<h1>Magic Catch: staff verification</h1>
+<p class="meta">Confirm a winner’s code, see their details, and mark the prize as given. Staff only.</p>
+
+<section class="card" aria-label="Connection">
+  <div class="grid">
+    <div><label for="api">Web app URL (ends in /exec)</label><input id="api" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"></div>
+    <div><label for="key">Admin key</label><input id="key" type="password" autocomplete="off" placeholder="From Script Properties: ADMIN_KEY"></div>
+    <div><label for="who">Your name (for the claim record)</label><input id="who" maxlength="12" placeholder="Staff name"></div>
+  </div>
+  <div class="msg" id="conn"></div>
+</section>
+
+<section class="card" aria-label="Check a code">
+  <h2>Check a verification code</h2>
+  <div class="row"><div><label for="code">Code shown by the player</label><input id="code" placeholder="RB-XXXX-XXXX" autocapitalize="characters" autocomplete="off"></div><button id="look">Check code</button></div>
+  <div class="msg" id="lmsg"></div><div id="lres"></div>
+</section>
+
+<section class="card" aria-label="Top players">
+  <h2>Top players (best run per player)</h2>
+  <div class="row">
+    <div><label for="mode">Mode</label><select id="mode"><option value="classic">Classic</option><option value="rush">Rush</option></select></div>
+    <div><label for="lim">Show</label><select id="lim"><option>10</option><option selected>25</option><option>50</option></select></div>
+    <button id="top">Load top players</button>
+  </div>
+  <div class="msg" id="tmsg"></div>
+  <div class="tablewrap"><table id="tt" hidden><thead><tr><th>#</th><th>Name</th><th>Score</th><th>Code</th><th>Mobile</th><th>Check</th><th>Status</th><th>When</th><th></th></tr></thead><tbody></tbody></table></div>
+  <p class="meta">Check = how close the run was to a perfect game on its seed. <span class="tag REVIEW">REVIEW</span> means look at it before handing over a prize. The player must show the code and confirm the mobile number.</p>
+</section>
+
+<section class="card" aria-label="Season">
+  <h2>Season</h2>
+  <p class="meta">Each season has its own leaderboard. Change the name to start a fresh board (old scores stay in the sheet).</p>
+  <div class="row"><div><label for="season">New season name</label><input id="season" maxlength="30" placeholder="e.g. October Week 3"></div><button class="sec" id="sbtn">Start new season</button></div>
+  <div class="msg" id="smsg"></div>
+</section>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+const DEFAULT_API = '';   // optional: paste your web app URL here so staff do not have to
+$('api').value = DEFAULT_API || localStorage.getItem('rb_admin_api') || '';
+$('key').value = sessionStorage.getItem('rb_admin_key') || '';
+$('who').value = localStorage.getItem('rb_admin_who') || '';
+
+async function call(body) {
+  const api = $('api').value.trim(), key = $('key').value;
+  if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(api)) throw new Error('Enter the web app URL first.');
+  if (!key) throw new Error('Enter the admin key.');
+  localStorage.setItem('rb_admin_api', api); sessionStorage.setItem('rb_admin_key', key); localStorage.setItem('rb_admin_who', $('who').value);
+  const r = await fetch(api, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key }, body)) });
+  const j = await r.json();
+  if (!j.ok) throw new Error({ auth: 'Wrong admin key.', locked: 'Too many wrong keys. Wait 10 minutes.', notfound: 'No run found with that code.', busy: 'Server busy. Try again.' }[j.err] || ('Error: ' + j.err));
+  return j;
+}
+function when(x) { return esc(x.when || ''); }
+function card(r) {
+  return `<div class="result"><div class="big">${esc(r.name)} · ${esc(r.score)} pts</div>
+  <p>Code <code>${esc(r.code)}</code> · ${esc(r.mode)} · ${esc(r.season)} · ${when(r)}</p>
+  <p>Mobile on file: <b>${esc(r.contact) || 'none given'}</b> · Combo ${esc(r.combo)} · ${esc(r.catches)} catches · ${esc(r.secs)}s</p>
+  <p><span class="tag ${esc(r.risk)}">${esc(r.risk)}</span> <span class="tag ${esc(r.status)}">${esc(r.status)}</span>${r.claimedAt ? ` claimed ${esc(r.claimedAt)} by ${esc(r.claimedBy)}` : ''}</p>
+  <div class="row"><button data-m="CLAIMED" data-c="${esc(r.code)}" ${r.status === 'CLAIMED' ? 'disabled' : ''}>Mark prize given</button><button class="bad" data-m="VOID" data-c="${esc(r.code)}">Void this score</button>${r.status !== 'OK' ? `<button class="sec" data-m="OK" data-c="${esc(r.code)}">Restore</button>` : ''}</div></div>`;
+}
+async function mark(code, status) {
+  if (status === 'VOID' && !confirm('Void this score? It will be removed from the leaderboard.')) return null;
+  if (status === 'CLAIMED' && !confirm('Confirm: the player showed the code and the prize was handed over?')) return null;
+  return call({ action: 'a_mark', code, status, by: $('who').value || 'staff' });
+}
+$('look').onclick = async () => {
+  const m = $('lmsg'); m.className = 'msg'; m.textContent = 'Checking…'; $('lres').innerHTML = '';
+  try { const j = await call({ action: 'a_lookup', code: $('code').value }); m.textContent = ''; $('lres').innerHTML = card(j.row); }
+  catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+};
+$('lres').onclick = async e => {
+  const b = e.target.closest('button[data-m]'); if (!b) return; b.disabled = true;
+  try { const j = await mark(b.dataset.c, b.dataset.m); if (j) $('lres').innerHTML = card(j.row); else b.disabled = false; } catch (er) { $('lmsg').className = 'msg err'; $('lmsg').textContent = er.message; b.disabled = false; }
+};
+$('top').onclick = async () => {
+  const m = $('tmsg'); m.className = 'msg'; m.textContent = 'Loading…';
+  try {
+    const j = await call({ action: 'a_top', mode: $('mode').value, limit: +$('lim').value });
+    m.textContent = `${esc(j.season)} · ${j.rows.length} players shown`;
+    $('tt').hidden = false;
+    $('tt').tBodies[0].innerHTML = j.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.name)}</td><td class="num">${esc(r.score)}</td><td><code>${esc(r.code)}</code></td><td>${esc(r.contact)}</td><td><span class="tag ${esc(r.risk)}">${esc(r.risk)}</span></td><td><span class="tag ${esc(r.status)}">${esc(r.status)}</span></td><td>${when(r)}</td><td><button class="sec" data-code="${esc(r.code)}">Open</button></td></tr>`).join('');
+  } catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+};
+$('tt').onclick = e => { const b = e.target.closest('button[data-code]'); if (!b) return; $('code').value = b.dataset.code; $('look').click(); $('code').scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+$('sbtn').onclick = async () => {
+  const m = $('smsg'); m.className = 'msg';
+  if (!$('season').value.trim() || !confirm('Start a new season? The public leaderboard will reset to empty.')) return;
+  try { const j = await call({ action: 'a_season', season: $('season').value }); m.className = 'msg good'; m.textContent = 'New season started: ' + j.season + '. The public board updates within a minute.'; }
+  catch (e) { m.className = 'msg err'; m.textContent = e.message; }
+};
+</script></main></body></html>
