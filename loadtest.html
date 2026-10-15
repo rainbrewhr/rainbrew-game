@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>Rainbrew Magic Catch | Load test</title>
+<style>
+:root{--ink:#3d2566;--bg:#f6f1ff;--card:#fff;--line:#e2d6fb;--btn:#7b4bb8;--ok:#1f8a57;--bad:#b42318}
+@media (prefers-color-scheme:dark){:root{--ink:#f3e8ff;--bg:#1d1433;--card:#2a1d49;--line:#46336f;--btn:#a78bfa;--ok:#6ee7a8;--bad:#fca5a5}}
+*{box-sizing:border-box}body{margin:0;padding:16px;font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--ink)}main{max-width:640px;margin:0 auto}
+h1{font-size:1.3rem;margin:0 0 6px}.card{background:var(--card);border:2px solid var(--line);border-radius:16px;padding:14px;margin:12px 0}label{display:block;font-size:.85rem;margin:8px 0 2px}
+input{font:inherit;width:100%;padding:10px 12px;border-radius:10px;border:2px solid var(--line);background:transparent;color:var(--ink)}button{font:inherit;font-weight:700;border:0;border-radius:12px;padding:12px 18px;min-height:48px;background:var(--btn);color:#fff;cursor:pointer;margin-top:10px}button:disabled{opacity:.5}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stat{border:1px solid var(--line);border-radius:12px;padding:8px}.stat b{display:block;font-size:1.3rem}.meta{font-size:.85rem;opacity:.85}.ok{color:var(--ok)}.bad{color:var(--bad)}
+</style></head><body><main>
+<h1>Load test: how many players can the server take?</h1>
+<p class="meta">Sends pretend players (each asks for a ranked session, plays a few seconds, submits a score) to <b>your</b> server, all at the same moment, and measures what happens. Test scores are tagged <b>TEST</b> and never appear on any leaderboard. Start small (50), then raise it.</p>
+<div class="card"><label for="api">Web app URL (ends in /exec)</label><input id="api" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+<div class="grid"><div><label for="n">Pretend players</label><input id="n" type="number" min="1" max="1000" value="50"></div><div><label for="spread">Spread over (seconds)</label><input id="spread" type="number" min="0" max="60" value="5"></div></div>
+<button id="go">Start test</button></div>
+<div class="card" id="out" hidden><div class="grid" id="stats"></div><p id="verdict"></p><p class="meta" id="note"></p></div>
+<script>
+'use strict';
+/* ===== RULES v3 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
+var RULES_VERSION = 3;
+var POINTS = { f: 1, s: 2, p: 2, b: 3, c: 3, t: 4, m: 4 };           // fries, salad, pizza, burger, chicken, tea, matcha
+var GOODS = ['f', 'f', 's', 'p', 'p', 'b', 'c', 't', 'm'];
+var START_LIVES = 3, MAX_LIVES = 5, LOGO_PTS = 25, DBL_MS = 10000, MAGNET_MS = 8000, SLOW_MS = 5000, MAX_MULT = 8;
+var INV_MS = 1200;                                                    // safety window after a hit: further hits are ignored
+var BONUS_EVERY = 150;                                                // a bonus life every 150 points (up to MAX_LIVES)
+var GRACE_SECS = 6;                                                   // no ghosts or pumpkins in the first 6 seconds
+var BOSS_EVERY = 10, BOSS_GAP = 0.55, ORB_PTS = 5, BOSS_BONUS = 100, INF_PEN = 10;
+var MIN_FALL = 0.25, MAX_FALL = 45;                                   // seconds an item may take from spawn to catch/miss
+// lvsec = seconds per level, dscale/cap = how fast and how far difficulty climbs, dur = timer (0 = none), max = longest allowed run (seconds)
+var MODES = {
+  classic:  { ranked: 1, lives: 3, lvsec: 20, dscale: 1,  cap: 8,  dur: 0,  max: 1800 },
+  rank:     { ranked: 1, lives: 3, lvsec: 12, dscale: .6, cap: 12, dur: 0,  max: 1800, boss: 1 },
+  rush:     { ranked: 1, lives: 5, lvsec: 13, dscale: 1,  cap: 12, dur: 60, max: 60 },
+  infinite: { ranked: 1, lives: 3, lvsec: 20, dscale: 1,  cap: 12, dur: 0,  max: 900, inf: 1 }
+};
+
+function mulberry32(a) {
+  return function () {
+    var t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function levelAt(sec, mode) { return 1 + Math.floor(sec / (MODES[mode] || MODES.classic).lvsec); }
+function diffAt(lv, mode) { var M = MODES[mode] || MODES.classic; return Math.min(M.cap, 1 + (lv - 1) * M.dscale); }
+function pBad(d) { return Math.min(0.38, 0.08 + d * 0.025); }
+function gapFor(d) { return Math.max(0.34, 0.95 - d * 0.045); }
+function bossHp(n) { return Math.min(12, 4 + 2 * n); }
+function bossSecs(n) { return Math.min(40, 20 + 4 * (n - 1)); }      // later bosses fight longer, so there are always plenty of orbs to win
+
+// Every item that will ever spawn is decided by the server-issued seed.
+// k: good-item letter | 'x' ghost/pumpkin | 'L' Rainbrew logo | 'G' magnet | 'H' shield | 'W' slow-mo | 'D' double points | 'U' extra life
+//    | 'O' boss orb (catch to damage the boss) | 'B' boss arrives (marker, not catchable) | 'E' boss window over (marker)
+function makeSchedule(seed, mode) {
+  var M = MODES[mode] || MODES.classic, r = mulberry32(seed >>> 0), i = 0, T = 0.8, bn = 0, inB = false, bEnd = 0, bj = 0;
+  return {
+    next: function () {
+      var lv = levelAt(T, mode);
+      if (M.boss && !inB && lv >= BOSS_EVERY * (bn + 1)) { bn++; inB = true; bj = 0; bEnd = T + bossSecs(bn); return { i: i++, T: T, k: 'B', lv: lv, d: 0, ghost: false, fx: 0.5, v: 0, w: 0, bn: bn }; }
+      if (inB && T >= bEnd) { inB = false; return { i: i++, T: T, k: 'E', lv: lv, d: 0, ghost: false, fx: 0.5, v: 0, w: 0, bn: bn }; }
+      var d = diffAt(lv, mode);
+      var r1 = r(), r2 = r(), r3 = r(), r4 = r(), r5 = r(), r6 = r(), r7 = r();
+      var k;
+      if (inB) k = (bj++ % 3 === 0 || r1 < 0.15) ? 'O' : r1 < 0.55 ? 'x' : r1 < 0.62 ? 'H' : r1 < 0.67 ? 'U' : GOODS[Math.floor(r2 * GOODS.length)];   // every 3rd item is an orb: the boss can always be beaten
+      else if (r1 < pBad(d) && T >= GRACE_SECS) k = 'x';
+      else if (r3 < 0.07) k = 'L';
+      else if (r3 < 0.14) k = r2 < 0.25 ? 'G' : r2 < 0.5 ? 'H' : r2 < 0.7 ? 'W' : r2 < 0.92 ? 'D' : 'U';
+      else k = GOODS[Math.floor(r2 * GOODS.length)];
+      var it = { i: i, T: T, k: k, lv: lv, d: d, ghost: r2 < 0.5, fx: r4, v: (85 + Math.min(d, M.cap) * 14) * (0.85 + r5 * 0.4) * (inB ? 0.95 : 1), w: r6 * 6, bn: inB ? bn : 0 };
+      i++; T += (inB ? BOSS_GAP : gapFor(d)) * (0.85 + r7 * 0.3);
+      return it;
+    }
+  };
+}
+
+function newState(mode) {
+  var M = MODES[mode] || MODES.classic;
+  return { score: 0, combo: 0, maxCombo: 0, catches: 0, lives: M.lives, shield: 0, dbl: -1, inv: -1, nextLife: BONUS_EVERY, over: 0, inf: M.inf ? 1 : 0, bossN: 0, bossHp: 0, bossDone: 1, bosses: 0 };
+}
+
+function addScore(S, n) {
+  S.score += n;
+  while (S.score >= S.nextLife) { S.nextLife += BONUS_EVERY; if (S.lives < MAX_LIVES) S.lives++; }
+}
+function bossInit(S, bn) { if (S.bossN !== bn) { S.bossN = bn; S.bossHp = bossHp(bn); S.bossDone = 0; } }
+
+// t = integer game-time milliseconds, a = 'c' caught | 'x' hit a baddie | 'm' missed an item, k = item kind, bn = boss number (boss orbs)
+function applyEvent(S, t, a, k, bn) {
+  var d = S.dbl >= t ? 2 : 1;
+  if (a === 'm') {
+    if (k === 'O') { bossInit(S, bn); if (!S.bossDone) S.bossHp = Math.min(bossHp(bn), S.bossHp + 1); }   // a missed orb heals the boss
+    else S.combo = 0;
+    return;
+  }
+  if (a === 'x') {
+    if (S.inv >= t) return;                                           // still in the safety window after the last hit
+    S.inv = t + INV_MS;
+    if (S.shield) { S.shield = 0; return; }
+    if (S.inf) { S.score = Math.max(0, S.score - INF_PEN); S.combo = 0; return; }   // Infinite: no lives, a hit costs points
+    S.lives--; S.combo = 0; if (S.lives <= 0) S.over = 1;
+    return;
+  }
+  if (k === 'O') {
+    bossInit(S, bn);
+    if (!S.bossDone) {
+      S.bossHp--; addScore(S, ORB_PTS * d);
+      if (S.bossHp <= 0) { S.bossDone = 1; S.bosses++; addScore(S, BOSS_BONUS * bn); S.lives = Math.min(MAX_LIVES, S.lives + 1); }
+    }
+    return;
+  }
+  if (k === 'L') { addScore(S, LOGO_PTS * d); return; }
+  if (k === 'G' || k === 'W') return;                                 // movement/visual effects only
+  if (k === 'H') { S.shield = 1; return; }
+  if (k === 'D') { S.dbl = t + DBL_MS; return; }
+  if (k === 'U') { S.lives = Math.min(MAX_LIVES, S.lives + 1); return; }
+  S.combo++; if (S.combo > S.maxCombo) S.maxCombo = S.combo; S.catches++;
+  addScore(S, POINTS[k] * Math.min(MAX_MULT, 1 + Math.floor(S.combo / 5)) * d);
+}
+/* ===== END RULES ===== */
+const $ = id => document.getElementById(id);
+$('api').value = localStorage.getItem('rb_lt_api') || '';
+function pct(a, p) { if (!a.length) return NaN; const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; }
+const fmt = x => Number.isFinite(x) ? (x / 1000).toFixed(2) + 's' : '-';
+function rid(n) { const a = 'abcdefghijkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < n; i++) s += a[Math.random() * a.length | 0]; return s; }
+async function call(url, opts) {
+  const t0 = performance.now();
+  try { const r = await fetch(url, opts); const j = await r.json(); return { ms: performance.now() - t0, j }; }
+  catch (e) { return { ms: performance.now() - t0, j: { ok: false, err: 'net' } }; }
+}
+// a tiny honest run: catches every treat that falls in the first 3.5 seconds
+function tinyRun(seed) {
+  const sch = makeSchedule(seed, 'rank'), S = newState('rank'), ev = []; let it;
+  while ((it = sch.next()).T + 0.6 <= 3.5) { if (it.k === 'x' || it.k === 'B' || it.k === 'E') continue; const t = Math.floor((it.T + 0.6) * 1000); applyEvent(S, t, 'c', it.k, it.bn); ev.push(t + '.' + it.i + '.c'); }
+  return { score: S.score, ev: ev.join(';'), tEnd: 3500 };
+}
+async function player(api, i, st) {
+  const did = 'lt' + rid(14);
+  const a = await call(api + '?' + new URLSearchParams({ action: 'start', mode: 'rank', did, n: 1 }));
+  st.start.push(a.ms); if (!a.j.ok) { st.fail.start++; st.errs[a.j.err] = (st.errs[a.j.err] || 0) + 1; return; }
+  const tk = a.j.tokens[0], g = tinyRun(tk.seed);
+  const b = await call(api, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'submit', token: tk.token, did, name: 'LOADTEST' + (i % 100), contact: '', score: g.score, tEnd: g.tEnd, ev: g.ev, mode: 'rank' }) });
+  st.submit.push(b.ms); if (b.j.ok) st.ok++; else { st.fail.submit++; st.errs[b.j.err] = (st.errs[b.j.err] || 0) + 1; }
+}
+function show(st, n, t0, done) {
+  const all = st.start.concat(st.submit), el = (performance.now() - t0) / 1000, bad = st.fail.start + st.fail.submit;
+  $('out').hidden = false;
+  $('stats').innerHTML = [['Scores confirmed', st.ok + ' / ' + n], ['Failed requests', bad], ['Submit time (median)', fmt(pct(st.submit, .5))], ['Submit time (slowest 5%)', fmt(pct(st.submit, .95))], ['Session time (median)', fmt(pct(st.start, .5))], ['Requests per second', (all.length / Math.max(el, .1)).toFixed(1)]].map(([k, v]) => `<div class="stat">${k}<b>${v}</b></div>`).join('');
+  if (done) {
+    const rate = bad / (n * 2), errs = Object.entries(st.errs).map(([k, v]) => k + ' x' + v).join(', ');
+    $('verdict').className = rate > .05 ? 'bad' : 'ok';
+    $('verdict').textContent = rate > .05 ? `Too many failures (${(rate * 100).toFixed(0)}%) at ${n} players at once. That is above the limit of this server for a same-moment crowd.` : `Handled ${n} players at once with ${(rate * 100).toFixed(1)}% failures. Try a bigger number.`;
+    $('note').textContent = 'In the real game a failed upload is retried automatically and the score is kept on the player’s phone, so a failure here is a delay for a player, not a lost score. ' + (errs ? 'Errors seen: ' + errs + '.' : '');
+  }
+}
+$('go').onclick = async () => {
+  const api = $('api').value.trim(), n = Math.max(1, Math.min(1000, +$('n').value || 50)), spread = Math.max(0, Math.min(60, +$('spread').value || 0));
+  if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(api)) { alert('Paste your web app URL first.'); return; }
+  localStorage.setItem('rb_lt_api', api); $('go').disabled = true;
+  const st = { start: [], submit: [], ok: 0, fail: { start: 0, submit: 0 }, errs: {} }, t0 = performance.now();
+  const timer = setInterval(() => show(st, n, t0, false), 500);
+  await Promise.all(Array.from({ length: n }, (_, i) => new Promise(r => setTimeout(r, Math.random() * spread * 1000)).then(() => player(api, i, st))));
+  clearInterval(timer); show(st, n, t0, true); $('go').disabled = false;
+};
+window.__lt = { tinyRun, player };
+</script></main></body></html>
