@@ -14,7 +14,7 @@ main{max-width:720px;margin:0 auto}h1{font-size:1.35rem;margin:0}h2{font-size:1r
 .ok{color:var(--ok);border-color:var(--ok)}.warnc{color:var(--warn);border-color:var(--warn)}.badc{color:var(--bad);border-color:var(--bad)}.gift{color:var(--btn);border-color:var(--btn)}
 .tabs{display:flex;gap:6px;overflow-x:auto;margin:8px 0}.tab{flex:1 0 auto;padding:10px 12px;border-radius:12px;border:2px solid var(--line);background:transparent;color:var(--ink);font:inherit;font-weight:700;cursor:pointer}
 .tab.on{background:linear-gradient(90deg,var(--btn2),var(--btn));color:#fff;border-color:transparent}
-input{font:inherit;width:100%;padding:12px 14px;border-radius:12px;border:2px solid var(--line);background:var(--card);color:var(--ink)}
+input,select{font:inherit;width:100%;padding:12px 14px;border-radius:12px;border:2px solid var(--line);background:var(--card);color:var(--ink)}
 button,.btn{font:inherit;font-weight:700;border:0;border-radius:12px;padding:12px 16px;min-height:48px;cursor:pointer;color:#fff;background:linear-gradient(90deg,var(--btn2),var(--btn));text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px}
 button.alt,.btn.alt{background:transparent;color:var(--ink);border:2px solid var(--line)}button.red{background:var(--bad)}button:disabled,.btn.dis{opacity:.5;pointer-events:none}
 button:focus-visible,input:focus-visible,.btn:focus-visible{outline:3px solid var(--btn);outline-offset:2px}
@@ -37,7 +37,7 @@ const ERRS = { auth: 'This staff code is wrong or was changed. Ask the game owne
 const app = $('app');
 
 let conn = LS.get('rb_staff', null);
-const S = { mode: 'rank', rows: [], players: 0, season: '', auto: true, q: '', found: null, open: {}, prizes: +LS.get('rb_staff_prizes', 3) || 3, who: LS.get('rb_staff_who', ''), toast: '', bad: false, busy: false, updated: 0, loaded: false, error: '' };
+const S = { mode: 'rank', rows: [], players: 0, season: '', auto: true, q: '', found: null, open: {}, prizes: +LS.get('rb_staff_prizes', 3) || 3, who: LS.get('rb_staff_who', ''), toast: '', bad: false, busy: false, updated: 0, loaded: false, error: '', comp: null, showComp: false, form: {} };
 
 /* ---------- connect (one time) ---------- */
 function decode(str) {
@@ -68,7 +68,9 @@ function flash(msg, bad) { S.toast = msg; S.bad = !!bad; render(); clearTimeout(
 async function load(silent) {
   if (!conn || S.busy) return; S.busy = true; if (!silent) render();
   try {
-    const j = await call({ action: 'a_top', mode: S.mode, limit: 100 });
+    try { S.comp = (await call({ action: 'a_comp' })).comp; } catch (e) { if (e.code === 'auth') throw e; }
+    if (S.mode === 'contest' && !S.comp) S.mode = 'rank';
+    const j = await call(S.mode === 'contest' ? { action: 'a_top', mode: 'rank', season: S.comp.season, limit: 100 } : { action: 'a_top', mode: S.mode, limit: 100 });
     S.rows = j.rows; S.players = j.players; S.season = j.season; S.auto = j.auto; S.updated = Date.now(); S.loaded = true; S.error = '';
   } catch (e) { S.error = e.message; if (e.code === 'auth') { conn = null; LS.set('rb_staff', null); } }
   S.busy = false; render();
@@ -104,6 +106,14 @@ async function act(a, code, extra) {
       patchRow(j.row); if (a === 'void') { S.rows = S.rows.filter(x => x.code !== code); S.found = null; }
       flash(a === 'give' ? '🎁 Prize recorded for ' + j.row.name : a === 'void' ? 'Score removed' : 'Restored'); return;
     }
+    if (a === 'comp') { S.showComp = !S.showComp; return render(); }
+    if (a === 'compsave') {
+      const f = S.form, name = f.cn != null ? f.cn : 'Rainbrew Contest', start = new Date(f.cs != null ? f.cs : localInput(nextHour())).getTime(), dur = +(f.cd != null ? f.cd : 7), unit = (f.cu || 'days') === 'hours' ? 3600e3 : 86400e3;
+      if (!start || !(dur > 0)) return flash('Check the start date and how long it lasts', true);
+      const j = await call({ action: 'a_comp_set', name, start, end: start + dur * unit, grace: +(f.cg != null ? f.cg : 15) });
+      S.comp = j.comp; flash('Competition saved: ' + j.comp.name); return load();
+    }
+    if (a === 'compclear') { if (!confirm('Remove the competition? Its scores stay in the sheet.')) return; const j = await call({ action: 'a_comp_clear' }); S.comp = j.comp; if (S.mode === 'contest') S.mode = 'rank'; flash('Competition removed'); return load(); }
     if (a === 'season') {
       const n = prompt('Name for a new leaderboard (the current one stays saved in the sheet):', '');
       if (n === null || !n.trim()) return;
@@ -130,6 +140,21 @@ function download() {
   return csv;
 }
 
+/* ---------- competition panel ---------- */
+const nextHour = () => Math.ceil(Date.now() / 3600e3) * 3600e3;
+function localInput(ms) { const d = new Date(ms), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+const when = ms => { try { return new Date(ms).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; } };
+function compPanel() {
+  const c = S.comp, f = S.form, val = (k, d) => esc(f[k] != null ? f[k] : d);
+  const status = !c ? 'No competition is set.' : { upcoming: 'Starts ' + when(c.start) + '.', live: 'LIVE until ' + when(c.end) + '.', closing: 'Ended. Late uploads are accepted until ' + when(c.end + c.grace * 60000) + '.', ended: 'Ended ' + when(c.end) + '. The winners are shown to everyone in the game.' }[c.state];
+  return `<div class="card"><h2>🏁 Competition</h2><p class="meta">Rank scores played between the start and the end decide the winners. Players see the countdown in the game and, after the deadline, who won.</p>
+  <p>${c ? '<b>' + esc(c.name) + '</b><br>' : ''}${esc(status)}</p>
+  <label for="cn">Name</label><input id="cn" maxlength="30" value="${val('cn', 'Rainbrew Contest')}">
+  <label for="cs">Starts</label><input id="cs" type="datetime-local" value="${val('cs', localInput(nextHour()))}">
+  <div class="acts"><div><label for="cd">Lasts</label><input id="cd" type="number" min="1" max="90" value="${val('cd', '7')}"></div><div><label for="cu">&nbsp;</label><select id="cu"><option value="days"${(f.cu || 'days') === 'days' ? ' selected' : ''}>days</option><option value="hours"${f.cu === 'hours' ? ' selected' : ''}>hours</option></select></div></div>
+  <label for="cg">Late uploads still count for (minutes)</label><input id="cg" type="number" min="0" max="240" value="${val('cg', '15')}">
+  <div class="acts"><button data-act="compsave">Save competition</button>${c ? '<button class="alt" data-act="compclear">Remove it</button>' : ''}</div></div>`;
+}
 /* ---------- screens ---------- */
 function visible() {
   const q = S.q.trim().toLowerCase(), qd = q.replace(/\D/g, '');
@@ -161,9 +186,10 @@ function connectScreen() {
 function main() {
   const vis = visible(), q = S.q.trim();
   const prizeRows = q ? [] : vis.filter(v => v.rank <= S.prizes), rest = q ? vis : vis.filter(v => v.rank > S.prizes);
-  return `<div class="top"><div><h1>Magic Catch staff</h1><div class="meta">${S.season ? esc(S.season) + (S.auto ? ' · automatic board' : ' · set by hand') + ' · ' : ''}${S.players} players${S.updated ? ' · updated ' + Math.max(0, Math.round((Date.now() - S.updated) / 1000)) + 's ago' : ''}</div></div><button class="alt" data-act="refresh">${S.busy ? '…' : '⟳'}</button></div>
+  return `<div class="top"><div><h1>Magic Catch staff</h1><div class="meta">${S.season ? esc(S.season) + (S.mode === 'contest' ? ' · contest results' : S.auto ? ' · automatic board' : ' · set by hand') + ' · ' : ''}${S.players} players${S.updated ? ' · updated ' + Math.max(0, Math.round((Date.now() - S.updated) / 1000)) + 's ago' : ''}</div></div><div class="acts" style="margin:0"><button class="alt" data-act="comp">🏁 Contest</button><button class="alt" data-act="refresh">${S.busy ? '…' : '⟳'}</button></div></div>
   ${S.toast ? `<div class="toast${S.bad ? ' bad' : ''}">${esc(S.toast)}</div>` : ''}${S.error ? `<div class="toast bad">${esc(S.error)}</div>` : ''}
-  <div class="tabs">${MODES.map(([m, n]) => `<button class="tab${S.mode === m ? ' on' : ''}" data-act="mode" data-code="${m}">${n}</button>`).join('')}</div>
+  ${S.showComp ? compPanel() : ''}
+  <div class="tabs">${MODES.concat(S.comp ? [['contest', '🏁 Results']] : []).map(([m, n]) => `<button class="tab${S.mode === m ? ' on' : ''}" data-act="mode" data-code="${m}">${n}</button>`).join('')}</div>
   <input id="q" placeholder="Search a code, name or phone number" value="${esc(S.q)}" autocomplete="off" inputmode="search">
   ${S.found ? `<h2 style="margin-top:12px">Found by code</h2>${card(S.found, 0, true)}` : ''}
   ${prizeRows.length ? `<h2 style="margin-top:12px">Prize winners (top ${S.prizes})</h2>` + prizeRows.map(v => card(v.r, v.rank, true)).join('') : ''}
@@ -183,7 +209,8 @@ app.addEventListener('click', e => {
   if (a === 'connect') { connect($('code').value); return; }
   act(a, b.dataset.code, b.dataset.extra);
 });
-app.addEventListener('input', e => { if (e.target.id === 'q') onSearch(e.target.value); });
+app.addEventListener('input', e => { if (e.target.id === 'q') onSearch(e.target.value); else if (/^c[nsdug]$/.test(e.target.id)) S.form[e.target.id] = e.target.value; });
+app.addEventListener('change', e => { if (e.target.id === 'cu') S.form.cu = e.target.value; });
 app.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'code') connect(e.target.value); });
 
 /* ---------- start ---------- */

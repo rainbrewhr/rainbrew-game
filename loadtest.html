@@ -17,22 +17,22 @@ input{font:inherit;width:100%;padding:10px 12px;border-radius:10px;border:2px so
 <div class="card" id="out" hidden><div class="grid" id="stats"></div><p id="verdict"></p><p class="meta" id="note"></p></div>
 <script>
 'use strict';
-/* ===== RULES v3 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
-var RULES_VERSION = 3;
-var POINTS = { f: 1, s: 2, p: 2, b: 3, c: 3, t: 4, m: 4 };           // fries, salad, pizza, burger, chicken, tea, matcha
+/* ===== RULES v4 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
+var RULES_VERSION = 4;
+var POINTS = { f: 1, s: 2, p: 2, b: 3, c: 3, t: 4, m: 4 };           // fries, salad, pizza, burger, chicken, tea, matcha (normal rules: catch these)
 var GOODS = ['f', 'f', 's', 'p', 'p', 'b', 'c', 't', 'm'];
-var START_LIVES = 3, MAX_LIVES = 5, LOGO_PTS = 25, DBL_MS = 10000, MAGNET_MS = 8000, SLOW_MS = 5000, MAX_MULT = 8;
+var LOGO_PTS = 25, DBL_MS = 10000, MAGNET_MS = 8000, SLOW_MS = 5000, MAX_MULT = 8;
 var INV_MS = 1200;                                                    // safety window after a hit: further hits are ignored
-var BONUS_EVERY = 150;                                                // a bonus life every 150 points (up to MAX_LIVES)
-var GRACE_SECS = 6;                                                   // no ghosts or pumpkins in the first 6 seconds
-var BOSS_EVERY = 10, BOSS_GAP = 0.55, ORB_PTS = 5, BOSS_BONUS = 100, INF_PEN = 10;
+var GRACE_SECS = 6;                                                   // no hazards in the first 6 seconds
+var INF_PEN = 10, MIX_FROM = 12;
 var MIN_FALL = 0.25, MAX_FALL = 45;                                   // seconds an item may take from spawn to catch/miss
-// lvsec = seconds per level, dscale/cap = how fast and how far difficulty climbs, dur = timer (0 = none), max = longest allowed run (seconds)
+// lvsec = seconds per level. Every stepLv levels the game gets one "speed step": +vstep px/s, items arrive faster and more are hazards.
+// flip = day/night reversal (night starts at level 4, 10, 16 ...). mix = share of items that play by the opposite rules (they glow).
 var MODES = {
-  classic:  { ranked: 1, lives: 3, lvsec: 20, dscale: 1,  cap: 8,  dur: 0,  max: 1800 },
-  rank:     { ranked: 1, lives: 3, lvsec: 12, dscale: .6, cap: 12, dur: 0,  max: 1800, boss: 1 },
-  rush:     { ranked: 1, lives: 5, lvsec: 13, dscale: 1,  cap: 12, dur: 60, max: 60 },
-  infinite: { ranked: 1, lives: 3, lvsec: 20, dscale: 1,  cap: 12, dur: 0,  max: 900, inf: 1 }
+  classic:  { ranked: 1, lives: 3, lvsec: 15, stepLv: 3, maxStep: 6,  v0: 95,  vstep: 18, gap0: 0.95, gapStep: 0.05,  gapMin: 0.5,  hz0: 0.12, hzStep: 0.03,  hzMax: 0.30, mix: 0.25, dur: 0,  max: 1800 },
+  rank:     { ranked: 1, lives: 3, lvsec: 12, stepLv: 2, maxStep: 18, v0: 100, vstep: 20, gap0: 0.9,  gapStep: 0.03,  gapMin: 0.3,  hz0: 0.11, hzStep: 0.022, hzMax: 0.42, flip: 1,   dur: 0,  max: 1800 },
+  rush:     { ranked: 1, lives: 5, lvsec: 8,  stepLv: 1, maxStep: 12, v0: 150, vstep: 20, gap0: 0.56, gapStep: 0.03,  gapMin: 0.26, hz0: 0.14, hzStep: 0.02,  hzMax: 0.34, dur: 60, max: 60 },
+  infinite: { ranked: 1, lives: 3, lvsec: 20, stepLv: 2, maxStep: 14, v0: 100, vstep: 14, gap0: 0.95, gapStep: 0.04,  gapMin: 0.34, hz0: 0.12, hzStep: 0.025, hzMax: 0.38, inf: 1, dur: 0, max: 900 }
 };
 
 function mulberry32(a) {
@@ -43,57 +43,50 @@ function mulberry32(a) {
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
 }
-function levelAt(sec, mode) { return 1 + Math.floor(sec / (MODES[mode] || MODES.classic).lvsec); }
-function diffAt(lv, mode) { var M = MODES[mode] || MODES.classic; return Math.min(M.cap, 1 + (lv - 1) * M.dscale); }
-function pBad(d) { return Math.min(0.38, 0.08 + d * 0.025); }
-function gapFor(d) { return Math.max(0.34, 0.95 - d * 0.045); }
-function bossHp(n) { return Math.min(12, 4 + 2 * n); }
-function bossSecs(n) { return Math.min(40, 20 + 4 * (n - 1)); }      // later bosses fight longer, so there are always plenty of orbs to win
+function modeOf(mode) { return MODES[mode] || MODES.classic; }
+function levelAt(sec, mode) { return 1 + Math.floor(sec / modeOf(mode).lvsec); }
+function stepAt(lv, mode) { var M = modeOf(mode); return Math.min(M.maxStep, Math.floor((lv - 1) / M.stepLv)); }
+function isNight(sec, mode) { return !!modeOf(mode).flip && Math.floor((levelAt(sec, mode) - 1) / 3) % 2 === 1; }
+
+// Reversal: at night (flip modes) or for glowing items (mix modes) the rules swap.
+// Normal: catch food + logo, dodge ghosts and pumpkins.  Reversed: catch ghosts and pumpkins, dodge food and the logo.
+function reversedAt(mode, tms, it) { var M = modeOf(mode); if (M.flip) return isNight(tms / 1000, mode); return !!(M.mix && it && it.mx); }
+function hazard(k, rv) { if (k === 'x') return !rv; if (k === 'L' || POINTS[k] !== undefined) return !!rv; return false; }
+function missable(k, rv) { return k === 'x' ? !!rv : POINTS[k] !== undefined && !rv; }   // a scoring item falling past breaks the combo
 
 // Every item that will ever spawn is decided by the server-issued seed.
-// k: good-item letter | 'x' ghost/pumpkin | 'L' Rainbrew logo | 'G' magnet | 'H' shield | 'W' slow-mo | 'D' double points | 'U' extra life
-//    | 'O' boss orb (catch to damage the boss) | 'B' boss arrives (marker, not catchable) | 'E' boss window over (marker)
+// k: food letter | 'x' ghost/pumpkin | 'L' Rainbrew logo | 'G' magnet | 'H' shield | 'W' slow-mo | 'D' double points
 function makeSchedule(seed, mode) {
-  var M = MODES[mode] || MODES.classic, r = mulberry32(seed >>> 0), i = 0, T = 0.8, bn = 0, inB = false, bEnd = 0, bj = 0;
+  var M = modeOf(mode), r = mulberry32(seed >>> 0), i = 0, T = 0.8;
   return {
     next: function () {
-      var lv = levelAt(T, mode);
-      if (M.boss && !inB && lv >= BOSS_EVERY * (bn + 1)) { bn++; inB = true; bj = 0; bEnd = T + bossSecs(bn); return { i: i++, T: T, k: 'B', lv: lv, d: 0, ghost: false, fx: 0.5, v: 0, w: 0, bn: bn }; }
-      if (inB && T >= bEnd) { inB = false; return { i: i++, T: T, k: 'E', lv: lv, d: 0, ghost: false, fx: 0.5, v: 0, w: 0, bn: bn }; }
-      var d = diffAt(lv, mode);
-      var r1 = r(), r2 = r(), r3 = r(), r4 = r(), r5 = r(), r6 = r(), r7 = r();
+      var lv = levelAt(T, mode), st = stepAt(lv, mode);
+      var r1 = r(), r2 = r(), r3 = r(), r4 = r(), r5 = r(), r6 = r(), r7 = r(), r8 = r();
+      var mx = (M.mix && T >= MIX_FROM && r8 < M.mix) ? 1 : 0;
+      var rv = isNight(T, mode) || mx;                                  // which rules apply when it appears (the mix is fixed per item, night is judged again when it is caught)
+      var haz = T >= GRACE_SECS && r1 < Math.min(M.hzMax, M.hz0 + st * M.hzStep);
       var k;
-      if (inB) k = (bj++ % 3 === 0 || r1 < 0.15) ? 'O' : r1 < 0.55 ? 'x' : r1 < 0.62 ? 'H' : r1 < 0.67 ? 'U' : GOODS[Math.floor(r2 * GOODS.length)];   // every 3rd item is an orb: the boss can always be beaten
-      else if (r1 < pBad(d) && T >= GRACE_SECS) k = 'x';
-      else if (r3 < 0.07) k = 'L';
-      else if (r3 < 0.14) k = r2 < 0.25 ? 'G' : r2 < 0.5 ? 'H' : r2 < 0.7 ? 'W' : r2 < 0.92 ? 'D' : 'U';
-      else k = GOODS[Math.floor(r2 * GOODS.length)];
-      var it = { i: i, T: T, k: k, lv: lv, d: d, ghost: r2 < 0.5, fx: r4, v: (85 + Math.min(d, M.cap) * 14) * (0.85 + r5 * 0.4) * (inB ? 0.95 : 1), w: r6 * 6, bn: inB ? bn : 0 };
-      i++; T += (inB ? BOSS_GAP : gapFor(d)) * (0.85 + r7 * 0.3);
+      if (r3 < 0.07) k = 'L';
+      else if (r3 < 0.14) k = r2 < 0.3 ? 'G' : r2 < 0.6 ? 'H' : r2 < 0.8 ? 'W' : 'D';
+      else if (haz) k = rv ? GOODS[Math.floor(r2 * GOODS.length)] : 'x';
+      else k = rv ? 'x' : GOODS[Math.floor(r2 * GOODS.length)];
+      var it = { i: i, T: T, k: k, lv: lv, st: st, mx: mx, ghost: r2 < 0.5, fx: r4, v: (M.v0 + st * M.vstep) * (0.85 + r5 * 0.4), w: r6 * 6 };
+      i++; T += Math.max(M.gapMin, M.gap0 - st * M.gapStep) * (0.85 + r7 * 0.3);
       return it;
     }
   };
 }
 
 function newState(mode) {
-  var M = MODES[mode] || MODES.classic;
-  return { score: 0, combo: 0, maxCombo: 0, catches: 0, lives: M.lives, shield: 0, dbl: -1, inv: -1, nextLife: BONUS_EVERY, over: 0, inf: M.inf ? 1 : 0, bossN: 0, bossHp: 0, bossDone: 1, bosses: 0 };
+  var M = modeOf(mode);
+  return { score: 0, combo: 0, maxCombo: 0, catches: 0, rev: 0, lives: M.lives, shield: 0, dbl: -1, inv: -1, over: 0, inf: M.inf ? 1 : 0 };
 }
 
-function addScore(S, n) {
-  S.score += n;
-  while (S.score >= S.nextLife) { S.nextLife += BONUS_EVERY; if (S.lives < MAX_LIVES) S.lives++; }
-}
-function bossInit(S, bn) { if (S.bossN !== bn) { S.bossN = bn; S.bossHp = bossHp(bn); S.bossDone = 0; } }
-
-// t = integer game-time milliseconds, a = 'c' caught | 'x' hit a baddie | 'm' missed an item, k = item kind, bn = boss number (boss orbs)
-function applyEvent(S, t, a, k, bn) {
-  var d = S.dbl >= t ? 2 : 1;
-  if (a === 'm') {
-    if (k === 'O') { bossInit(S, bn); if (!S.bossDone) S.bossHp = Math.min(bossHp(bn), S.bossHp + 1); }   // a missed orb heals the boss
-    else S.combo = 0;
-    return;
-  }
+// t = integer game-time ms, a = 'c' caught something good | 'x' touched a hazard | 'm' a scoring item fell past
+// k = item kind, gh = ghost (3 pts) or pumpkin (2 pts) when reversed rules make it worth catching
+function applyEvent(S, t, a, k, gh) {
+  var d = S.dbl >= t ? 2 : 1, mult;
+  if (a === 'm') { S.combo = 0; return; }
   if (a === 'x') {
     if (S.inv >= t) return;                                           // still in the safety window after the last hit
     S.inv = t + INV_MS;
@@ -102,21 +95,14 @@ function applyEvent(S, t, a, k, bn) {
     S.lives--; S.combo = 0; if (S.lives <= 0) S.over = 1;
     return;
   }
-  if (k === 'O') {
-    bossInit(S, bn);
-    if (!S.bossDone) {
-      S.bossHp--; addScore(S, ORB_PTS * d);
-      if (S.bossHp <= 0) { S.bossDone = 1; S.bosses++; addScore(S, BOSS_BONUS * bn); S.lives = Math.min(MAX_LIVES, S.lives + 1); }
-    }
-    return;
-  }
-  if (k === 'L') { addScore(S, LOGO_PTS * d); return; }
+  if (k === 'L') { S.score += LOGO_PTS * d; return; }
   if (k === 'G' || k === 'W') return;                                 // movement/visual effects only
   if (k === 'H') { S.shield = 1; return; }
   if (k === 'D') { S.dbl = t + DBL_MS; return; }
-  if (k === 'U') { S.lives = Math.min(MAX_LIVES, S.lives + 1); return; }
   S.combo++; if (S.combo > S.maxCombo) S.maxCombo = S.combo; S.catches++;
-  addScore(S, POINTS[k] * Math.min(MAX_MULT, 1 + Math.floor(S.combo / 5)) * d);
+  mult = Math.min(MAX_MULT, 1 + Math.floor(S.combo / 5));
+  if (k === 'x') { S.rev++; S.score += (gh ? 3 : 2) * mult * d; return; }
+  S.score += POINTS[k] * mult * d;
 }
 /* ===== END RULES ===== */
 const $ = id => document.getElementById(id);
@@ -132,7 +118,7 @@ async function call(url, opts) {
 // a tiny honest run: catches every treat that falls in the first 3.5 seconds
 function tinyRun(seed) {
   const sch = makeSchedule(seed, 'rank'), S = newState('rank'), ev = []; let it;
-  while ((it = sch.next()).T + 0.6 <= 3.5) { if (it.k === 'x' || it.k === 'B' || it.k === 'E') continue; const t = Math.floor((it.T + 0.6) * 1000); applyEvent(S, t, 'c', it.k, it.bn); ev.push(t + '.' + it.i + '.c'); }
+  while ((it = sch.next()).T + 0.6 <= 3.5) { const t = Math.floor((it.T + 0.6) * 1000); if (hazard(it.k, reversedAt('rank', t, it))) continue; applyEvent(S, t, 'c', it.k, it.ghost); ev.push(t + '.' + it.i + '.c'); }
   return { score: S.score, ev: ev.join(';'), tEnd: 3500 };
 }
 async function player(api, i, st) {
