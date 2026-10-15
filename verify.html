@@ -46,7 +46,7 @@ function decode(str) {
   try {
     let b = str.replace(/-/g, '+').replace(/_/g, '/'); while (b.length % 4) b += '=';
     const j = JSON.parse(atob(b));
-    if (j && /^https:\/\/script\.google(usercontent)?\.com\//.test(j.u) && j.k) return { u: j.u, k: j.k };
+    if (j && /^https:\/\/script\.google(usercontent)?\.com\//.test(j.u) && j.k) return { u: String(j.u).replace(/\/dev(\?.*)?$/, '/exec'), k: j.k };   // /dev is the owner-only test address
   } catch (e) {}
   return null;
 }
@@ -58,9 +58,10 @@ function connect(str) {
 function disconnect() { conn = null; LS.set('rb_staff', null); S.rows = []; S.loaded = false; render(); }
 
 /* ---------- server ---------- */
+const HELP = 'Can’t reach the server. Ask the game owner to check in Apps Script: Deploy → Manage deployments → Edit → “Who has access” must be Anyone, the address must end in /exec, then Version: New version → Deploy.';
 async function call(body) {
-  const r = await fetch(conn.u, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key: conn.k }, body)) });
-  const j = await r.json();
+  let r; try { r = await fetch(conn.u, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key: conn.k }, body)) }); } catch (e) { const x = new Error(HELP); x.code = 'net'; throw x; }
+  let j; try { j = await r.json(); } catch (e) { const x = new Error('The server answered with a web page instead of data. In Apps Script set “Who has access” to Anyone and redeploy a New version.'); x.code = 'html'; throw x; }
   if (!j.ok) { const e = new Error(ERRS[j.err] || ('Error: ' + j.err)); e.code = j.err; throw e; }
   return j;
 }

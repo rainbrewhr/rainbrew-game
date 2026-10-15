@@ -17,22 +17,23 @@ input{font:inherit;width:100%;padding:10px 12px;border-radius:10px;border:2px so
 <div class="card" id="out" hidden><div class="grid" id="stats"></div><p id="verdict"></p><p class="meta" id="note"></p></div>
 <script>
 'use strict';
-/* ===== RULES v4 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
-var RULES_VERSION = 4;
+/* ===== RULES v5 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
+var RULES_VERSION = 5;
 var POINTS = { f: 1, s: 2, p: 2, b: 3, c: 3, t: 4, m: 4 };           // fries, salad, pizza, burger, chicken, tea, matcha (normal rules: catch these)
 var GOODS = ['f', 'f', 's', 'p', 'p', 'b', 'c', 't', 'm'];
 var LOGO_PTS = 25, DBL_MS = 10000, MAGNET_MS = 8000, SLOW_MS = 5000, MAX_MULT = 8;
 var INV_MS = 1200;                                                    // safety window after a hit: further hits are ignored
 var GRACE_SECS = 6;                                                   // no hazards in the first 6 seconds
 var INF_PEN = 10, MIX_FROM = 12;
+var GOLD_X = 3, SEQ_BONUS = 40, WAVE_FROM = 12;                       // golden items score x3; "Order up!" bonus; first wave after 12s
 var MIN_FALL = 0.25, MAX_FALL = 45;                                   // seconds an item may take from spawn to catch/miss
 // lvsec = seconds per level. Every stepLv levels the game gets one "speed step": +vstep px/s, items arrive faster and more are hazards.
-// flip = day/night reversal (night starts at level 4, 10, 16 ...). mix = share of items that play by the opposite rules (they glow).
+// flip = levels per day/night phase (Rank). mix = share of items that play by the opposite rules (they glow). wave = seconds between "moments".
 var MODES = {
-  classic:  { ranked: 1, lives: 3, lvsec: 15, stepLv: 3, maxStep: 6,  v0: 95,  vstep: 18, gap0: 0.95, gapStep: 0.05,  gapMin: 0.5,  hz0: 0.12, hzStep: 0.03,  hzMax: 0.30, mix: 0.25, dur: 0,  max: 1800 },
-  rank:     { ranked: 1, lives: 3, lvsec: 12, stepLv: 2, maxStep: 18, v0: 100, vstep: 20, gap0: 0.9,  gapStep: 0.03,  gapMin: 0.3,  hz0: 0.11, hzStep: 0.022, hzMax: 0.42, flip: 1,   dur: 0,  max: 1800 },
-  rush:     { ranked: 1, lives: 5, lvsec: 8,  stepLv: 1, maxStep: 12, v0: 150, vstep: 20, gap0: 0.56, gapStep: 0.03,  gapMin: 0.26, hz0: 0.14, hzStep: 0.02,  hzMax: 0.34, dur: 60, max: 60 },
-  infinite: { ranked: 1, lives: 3, lvsec: 20, stepLv: 2, maxStep: 14, v0: 100, vstep: 14, gap0: 0.95, gapStep: 0.04,  gapMin: 0.34, hz0: 0.12, hzStep: 0.025, hzMax: 0.38, inf: 1, dur: 0, max: 900 }
+  classic:  { ranked: 1, lives: 3, lvsec: 15, stepLv: 2, maxStep: 9,  v0: 195, vstep: 28, gap0: 0.72, gapStep: 0.035, gapMin: 0.34, hz0: 0.17, hzStep: 0.027, hzMax: 0.40, mix: 0.30, wave: 18, dur: 0,  max: 1800 },
+  rank:     { ranked: 1, lives: 3, lvsec: 12, stepLv: 2, maxStep: 12, v0: 215, vstep: 36, gap0: 0.70, gapStep: 0.03,  gapMin: 0.30, hz0: 0.14, hzStep: 0.025, hzMax: 0.44, flip: 2,  wave: 14, dur: 0,  max: 1800 },
+  rush:     { ranked: 1, lives: 5, lvsec: 8,  stepLv: 1, maxStep: 7,  v0: 350, vstep: 50, gap0: 0.42, gapStep: 0.03,  gapMin: 0.21, hz0: 0.22, hzStep: 0.025, hzMax: 0.44, wave: 8,  dur: 60, max: 60 },
+  infinite: { ranked: 1, lives: 3, lvsec: 20, stepLv: 2, maxStep: 14, v0: 165, vstep: 22, gap0: 0.80, gapStep: 0.03,  gapMin: 0.34, hz0: 0.14, hzStep: 0.025, hzMax: 0.40, inf: 1, wave: 18, dur: 0, max: 900 }
 };
 
 function mulberry32(a) {
@@ -46,7 +47,7 @@ function mulberry32(a) {
 function modeOf(mode) { return MODES[mode] || MODES.classic; }
 function levelAt(sec, mode) { return 1 + Math.floor(sec / modeOf(mode).lvsec); }
 function stepAt(lv, mode) { var M = modeOf(mode); return Math.min(M.maxStep, Math.floor((lv - 1) / M.stepLv)); }
-function isNight(sec, mode) { return !!modeOf(mode).flip && Math.floor((levelAt(sec, mode) - 1) / 3) % 2 === 1; }
+function isNight(sec, mode) { var M = modeOf(mode); return !!M.flip && Math.floor((levelAt(sec, mode) - 1) / M.flip) % 2 === 1; }
 
 // Reversal: at night (flip modes) or for glowing items (mix modes) the rules swap.
 // Normal: catch food + logo, dodge ghosts and pumpkins.  Reversed: catch ghosts and pumpkins, dodge food and the logo.
@@ -56,12 +57,47 @@ function missable(k, rv) { return k === 'x' ? !!rv : POINTS[k] !== undefined && 
 
 // Every item that will ever spawn is decided by the server-issued seed.
 // k: food letter | 'x' ghost/pumpkin | 'L' Rainbrew logo | 'G' magnet | 'H' shield | 'W' slow-mo | 'D' double points
+// gd: golden (x3) · sq/so: part of an "Order up!" sequence (catch 1, 2, 3 in order) · wv: name of the "moment" this item belongs to (first item only)
 function makeSchedule(seed, mode) {
-  var M = modeOf(mode), r = mulberry32(seed >>> 0), i = 0, T = 0.8;
+  var M = modeOf(mode), r = mulberry32(seed >>> 0), i = 0, T = 0.8, queue = [], nextWave = WAVE_FROM + r() * 6, waveId = 0;
+  function flipSoon(t0) { return !!M.flip && isNight(t0 + 6, mode) !== isNight(t0 - 1, mode); }     // keep "moments" away from a day/night flip
+  function mk(t0, fx, target, extra) {                                  // one item of a moment: target or hazard under the rules at its spawn time
+    var lv = levelAt(t0, mode), st = stepAt(lv, mode), rv = isNight(t0, mode);
+    var k = target ? (rv ? 'x' : GOODS[Math.floor(r() * GOODS.length)]) : (rv ? GOODS[Math.floor(r() * GOODS.length)] : 'x');
+    var it = { T: t0, k: k, lv: lv, st: st, mx: 0, gd: 0, ghost: r() < 0.5, fx: Math.max(0.04, Math.min(0.96, fx)), v: (M.v0 + st * M.vstep) * (0.9 + r() * 0.2), w: r() * 6 };
+    for (var p in extra) it[p] = extra[p];
+    return it;
+  }
+  function buildWave(t0) {
+    var pick = r(), id = ++waveId, out = [], j, n, c, h;
+    if (pick < 0.22) {                                                  // a row across the screen with one hazard hiding in it
+      h = Math.floor(r() * 5); for (j = 0; j < 5; j++) out.push(mk(t0 + j * 0.1, 0.1 + j * 0.2, j !== h, j === 0 ? { wv: 'line' } : {}));
+    } else if (pick < 0.40) {                                           // zig-zag: left, right, left, right with a hazard in the middle
+      for (j = 0; j < 6; j++) out.push(mk(t0 + j * 0.5, (j % 2 ? 0.88 : 0.12) + (r() - 0.5) * 0.08, true, j === 0 ? { wv: 'zig' } : {}));
+      out.push(mk(t0 + 1.2, 0.5, false, {}));
+    } else if (pick < 0.60) {                                           // a stream falling in a narrow band, one hazard inside
+      c = 0.2 + 0.6 * r(); h = 3 + Math.floor(r() * 2); for (j = 0; j < 7; j++) out.push(mk(t0 + j * 0.2, c + (r() - 0.5) * 0.24, j !== h, j === 0 ? { wv: 'rain' } : {}));
+    } else if (pick < 0.78) {                                           // thread the needle: a wall of hazards with one gap, a golden prize in the gap
+      c = [0.25, 0.5, 0.75][Math.floor(r() * 3)]; var xs = [0.06, 0.2, 0.34, 0.5, 0.66, 0.8, 0.94];
+      for (j = 0; j < xs.length; j++) if (Math.abs(xs[j] - c) > 0.14) out.push(mk(t0 + j * 0.03, xs[j], false, out.length ? {} : { wv: 'needle' }));
+      out.push(mk(t0 + 0.12, c, true, { gd: 1 }));
+    } else {                                                            // "Order up!": three numbered items, catch them 1-2-3 for a bonus
+      var fxs = [0.15 + 0.2 * r(), 0.4 + 0.2 * r(), 0.65 + 0.2 * r()];
+      for (j = 2; j > 0; j--) { var q = Math.floor(r() * (j + 1)), tmp = fxs[j]; fxs[j] = fxs[q]; fxs[q] = tmp; }
+      for (j = 0; j < 3; j++) out.push(mk(t0 + j * 0.85, fxs[j], true, j === 0 ? { wv: 'seq', sq: id, so: 1 } : { sq: id, so: j + 1 }));
+    }
+    out.sort(function (a, b) { return a.T - b.T; });
+    n = out.length; return out;
+  }
   return {
     next: function () {
+      if (!queue.length && T >= nextWave && !flipSoon(T)) {
+        queue = buildWave(T); var lastT = queue[queue.length - 1].T;
+        T = lastT + 0.5 + 0.3 * r(); nextWave = T + M.wave * (0.8 + 0.4 * r());
+      }
+      if (queue.length) { var w = queue.shift(); w.i = i++; return w; }
       var lv = levelAt(T, mode), st = stepAt(lv, mode);
-      var r1 = r(), r2 = r(), r3 = r(), r4 = r(), r5 = r(), r6 = r(), r7 = r(), r8 = r();
+      var r1 = r(), r2 = r(), r3 = r(), r4 = r(), r5 = r(), r6 = r(), r7 = r(), r8 = r(), r9 = r();
       var mx = (M.mix && T >= MIX_FROM && r8 < M.mix) ? 1 : 0;
       var rv = isNight(T, mode) || mx;                                  // which rules apply when it appears (the mix is fixed per item, night is judged again when it is caught)
       var haz = T >= GRACE_SECS && r1 < Math.min(M.hzMax, M.hz0 + st * M.hzStep);
@@ -70,7 +106,8 @@ function makeSchedule(seed, mode) {
       else if (r3 < 0.14) k = r2 < 0.3 ? 'G' : r2 < 0.6 ? 'H' : r2 < 0.8 ? 'W' : 'D';
       else if (haz) k = rv ? GOODS[Math.floor(r2 * GOODS.length)] : 'x';
       else k = rv ? 'x' : GOODS[Math.floor(r2 * GOODS.length)];
-      var it = { i: i, T: T, k: k, lv: lv, st: st, mx: mx, ghost: r2 < 0.5, fx: r4, v: (M.v0 + st * M.vstep) * (0.85 + r5 * 0.4), w: r6 * 6 };
+      var target = !haz && k !== 'L' && k !== 'G' && k !== 'H' && k !== 'W' && k !== 'D';
+      var it = { i: i, T: T, k: k, lv: lv, st: st, mx: mx, gd: (target && r9 < 0.1) ? 1 : 0, ghost: r2 < 0.5, fx: r4, v: (M.v0 + st * M.vstep) * (0.85 + r5 * 0.4), w: r6 * 6 };
       i++; T += Math.max(M.gapMin, M.gap0 - st * M.gapStep) * (0.85 + r7 * 0.3);
       return it;
     }
@@ -79,20 +116,20 @@ function makeSchedule(seed, mode) {
 
 function newState(mode) {
   var M = modeOf(mode);
-  return { score: 0, combo: 0, maxCombo: 0, catches: 0, rev: 0, lives: M.lives, shield: 0, dbl: -1, inv: -1, over: 0, inf: M.inf ? 1 : 0 };
+  return { score: 0, combo: 0, maxCombo: 0, catches: 0, rev: 0, seqs: 0, golds: 0, sq: 0, sn: 0, lives: M.lives, shield: 0, dbl: -1, inv: -1, over: 0, inf: M.inf ? 1 : 0 };
 }
 
 // t = integer game-time ms, a = 'c' caught something good | 'x' touched a hazard | 'm' a scoring item fell past
-// k = item kind, gh = ghost (3 pts) or pumpkin (2 pts) when reversed rules make it worth catching
-function applyEvent(S, t, a, k, gh) {
-  var d = S.dbl >= t ? 2 : 1, mult;
-  if (a === 'm') { S.combo = 0; return; }
+// k = item kind, gh = ghost (3 pts) or pumpkin (2 pts) when reversed rules make it worth catching, it = the item (for gold and sequences)
+function applyEvent(S, t, a, k, gh, it) {
+  var d = S.dbl >= t ? 2 : 1, mult, g = it && it.gd ? GOLD_X : 1;
+  if (a === 'm') { S.combo = 0; if (it && it.sq && S.sq === it.sq) S.sq = 0; return; }
   if (a === 'x') {
     if (S.inv >= t) return;                                           // still in the safety window after the last hit
     S.inv = t + INV_MS;
     if (S.shield) { S.shield = 0; return; }
     if (S.inf) { S.score = Math.max(0, S.score - INF_PEN); S.combo = 0; return; }   // Infinite: no lives, a hit costs points
-    S.lives--; S.combo = 0; if (S.lives <= 0) S.over = 1;
+    S.lives--; S.combo = 0; if (S.lives <= 0) S.over = 1;             // there is no way to win a life back
     return;
   }
   if (k === 'L') { S.score += LOGO_PTS * d; return; }
@@ -101,8 +138,14 @@ function applyEvent(S, t, a, k, gh) {
   if (k === 'D') { S.dbl = t + DBL_MS; return; }
   S.combo++; if (S.combo > S.maxCombo) S.maxCombo = S.combo; S.catches++;
   mult = Math.min(MAX_MULT, 1 + Math.floor(S.combo / 5));
-  if (k === 'x') { S.rev++; S.score += (gh ? 3 : 2) * mult * d; return; }
-  S.score += POINTS[k] * mult * d;
+  if (g > 1) S.golds++;
+  if (k === 'x') { S.rev++; S.score += (gh ? 3 : 2) * mult * d * g; }
+  else S.score += POINTS[k] * mult * d * g;
+  if (it && it.so) {                                                  // "Order up!": 1, then 2, then 3, in that order
+    if (it.so === 1) { S.sq = it.sq; S.sn = 2; }
+    else if (S.sq === it.sq && S.sn === it.so) { if (it.so === 3) { S.score += SEQ_BONUS * d; S.seqs++; S.sq = 0; } else S.sn++; }
+    else S.sq = 0;
+  }
 }
 /* ===== END RULES ===== */
 const $ = id => document.getElementById(id);
@@ -117,16 +160,16 @@ async function call(url, opts) {
 }
 // a tiny honest run: catches every treat that falls in the first 3.5 seconds
 function tinyRun(seed) {
-  const sch = makeSchedule(seed, 'rank'), S = newState('rank'), ev = []; let it;
-  while ((it = sch.next()).T + 0.6 <= 3.5) { const t = Math.floor((it.T + 0.6) * 1000); if (hazard(it.k, reversedAt('rank', t, it))) continue; applyEvent(S, t, 'c', it.k, it.ghost); ev.push(t + '.' + it.i + '.c'); }
+  const sch = makeSchedule(seed, 'classic'), S = newState('classic'), ev = []; let it;
+  while ((it = sch.next()).T + 0.6 <= 3.5) { const t = Math.floor((it.T + 0.6) * 1000); if (hazard(it.k, reversedAt('classic', t, it))) continue; applyEvent(S, t, 'c', it.k, it.ghost, it); ev.push(t + '.' + it.i + '.c'); }
   return { score: S.score, ev: ev.join(';'), tEnd: 3500 };
 }
 async function player(api, i, st) {
   const did = 'lt' + rid(14);
-  const a = await call(api + '?' + new URLSearchParams({ action: 'start', mode: 'rank', did, n: 1 }));
+  const a = await call(api + '?' + new URLSearchParams({ action: 'start', mode: 'classic', did, n: 1 }));
   st.start.push(a.ms); if (!a.j.ok) { st.fail.start++; st.errs[a.j.err] = (st.errs[a.j.err] || 0) + 1; return; }
   const tk = a.j.tokens[0], g = tinyRun(tk.seed);
-  const b = await call(api, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'submit', token: tk.token, did, name: 'LOADTEST' + (i % 100), contact: '', score: g.score, tEnd: g.tEnd, ev: g.ev, mode: 'rank' }) });
+  const b = await call(api, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'submit', token: tk.token, did, name: 'LOADTEST' + (i % 100), contact: '', score: g.score, tEnd: g.tEnd, ev: g.ev, mode: 'classic' }) });
   st.submit.push(b.ms); if (b.j.ok) st.ok++; else { st.fail.submit++; st.errs[b.j.err] = (st.errs[b.j.err] || 0) + 1; }
 }
 function show(st, n, t0, done) {
