@@ -17,8 +17,8 @@ input{font:inherit;width:100%;padding:10px 12px;border-radius:10px;border:2px so
 <div class="card" id="out" hidden><div class="grid" id="stats"></div><p id="verdict"></p><p class="meta" id="note"></p></div>
 <script>
 'use strict';
-/* ===== RULES v9 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
-var RULES_VERSION = 9;
+/* ===== RULES v10 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
+var RULES_VERSION = 10;
 var POINTS = { f: 1, s: 2, p: 2, b: 3, c: 3, t: 4, m: 4, a: 5, r: 3, i: 4 };   // fries, salad, pizza, burger, chicken, tea, matcha, coffee, pasta, ice cream (normal rules: catch these)
 var GOODS = ['f', 'f', 's', 'p', 'p', 'b', 'c', 't', 'm', 'a', 'r', 'i'];
 var LOGO_PTS = 25, DBL_MS = 10000, MAGNET_MS = 8000, SLOW_MS = 5000, MAX_MULT = 8;
@@ -29,13 +29,13 @@ var BOSS_FOOD_GAP = 0.6, BOSS_HAZ_GAP = 0.95;                         // a boss 
 var GOLD_X = 3, SEQ_BONUS = 40, WAVE_FROM = 12, FLIP_SAFE_MS = 1000;   // after every day/night switch you cannot be hurt for 1 second (fair to everything already on screen)                       // golden items score x3; "Order up!" bonus; first wave after 12s
 var MIN_FALL = 0.25, MAX_FALL = 45;                                   // seconds an item may take from spawn to catch/miss
 // lvsec = seconds per level. Every stepLv levels the game gets one "speed step": +vstep px/s, items arrive faster and more are hazards.
-// boss = a boss arrives after this many levels (20, 40, ...): it takes over one whole DAY phase.   cycle = levels per day/night phase that only change the LOOK.
+// boss = a boss arrives after this many levels (10, 20, ...): it takes over one whole phase and that phase is DAY (rules and look), so nothing flips around it.   cycle = levels per day/night phase that only change the LOOK.
 // flip = levels per day/night phase (Rank). mix = share of items that play by the opposite rules (they glow). wave = seconds between "moments".
 var MODES = {
-  classic:  { ranked: 1, lives: 3, lvsec: 12, stepLv: 2, maxStep: 12, v0: 215, vstep: 36, gap0: 0.70, gapStep: 0.03,  gapMin: 0.30, hz0: 0.14, hzStep: 0.025, hzMax: 0.44, cycle: 2, boss: 20, dur: 0,  max: 1800 },   // the same speed as Rank, but simple: always catch food, always dodge ghosts and pumpkins. It has a day/night LOOK (cycle) but the rules never change: no flip, no glowing items, no special moments
-  rank:     { ranked: 1, lives: 3, lvsec: 12, stepLv: 2, maxStep: 12, v0: 215, vstep: 36, gap0: 0.70, gapStep: 0.03,  gapMin: 0.30, hz0: 0.14, hzStep: 0.025, hzMax: 0.44, flip: 2,  wave: 14, boss: 20, dur: 0,  max: 1800 },
+  classic:  { ranked: 1, lives: 3, lvsec: 12, stepLv: 2, maxStep: 12, v0: 215, vstep: 36, gap0: 0.70, gapStep: 0.03,  gapMin: 0.30, hz0: 0.14, hzStep: 0.025, hzMax: 0.44, cycle: 2, boss: 10, dur: 0,  max: 1800 },   // the same speed as Rank, but simple: always catch food, always dodge ghosts and pumpkins. It has a day/night LOOK (cycle) but the rules never change: no flip, no glowing items, no special moments
+  rank:     { ranked: 1, lives: 3, lvsec: 12, stepLv: 2, maxStep: 12, v0: 215, vstep: 36, gap0: 0.70, gapStep: 0.03,  gapMin: 0.30, hz0: 0.14, hzStep: 0.025, hzMax: 0.44, flip: 2,  wave: 14, boss: 10, dur: 0,  max: 1800 },
   rush:     { ranked: 1, lives: 5, lvsec: 8,  stepLv: 1, maxStep: 7,  v0: 350, vstep: 50, gap0: 0.42, gapStep: 0.03,  gapMin: 0.21, hz0: 0.22, hzStep: 0.025, hzMax: 0.44, cycle: 2, wave: 8,  dur: 60, max: 60 },
-  infinite: { ranked: 1, lives: 3, lvsec: 20, stepLv: 2, maxStep: 14, v0: 165, vstep: 22, gap0: 0.80, gapStep: 0.03,  gapMin: 0.34, hz0: 0.14, hzStep: 0.025, hzMax: 0.40, cycle: 2, boss: 20, inf: 1, wave: 18, dur: 0, max: 900 }
+  infinite: { ranked: 1, lives: 3, lvsec: 20, stepLv: 2, maxStep: 14, v0: 165, vstep: 22, gap0: 0.80, gapStep: 0.03,  gapMin: 0.34, hz0: 0.14, hzStep: 0.025, hzMax: 0.40, cycle: 2, boss: 10, inf: 1, wave: 18, dur: 0, max: 900 }
 };
 
 function mulberry32(a) {
@@ -52,15 +52,15 @@ function stepAt(lv, mode) { var M = modeOf(mode); return Math.min(M.maxStep, Mat
 function flipLen(mode) { var M = modeOf(mode); return M.flip ? M.flip * M.lvsec : 0; }                         // seconds between day/night switches
 function nextFlipAt(sec, mode) { var P = flipLen(mode); return P ? (Math.floor(sec / P) + 1) * P : Infinity; }  // when the next switch happens
 function flipSafeAt(mode, tms) { var P = flipLen(mode) * 1000; return !!P && tms >= P && tms % P < FLIP_SAFE_MS; }
-function nightVisual(sec, mode) { var M = modeOf(mode), n = M.flip || M.cycle; return !!n && Math.floor((levelAt(sec, mode) - 1) / n) % 2 === 1; }   // is the sky dark? (Rank: the rules flip too. Classic: decoration only, the rules never change). The Halloween logo is shown when this is true
-// ---- the boss: after level 20, 40, ... a boss takes over one whole day phase (so it never overlaps a night flip) ----
+function nightVisual(sec, mode) { var M = modeOf(mode), n = M.flip || M.cycle; return !!n && !bossAt(sec, mode) && Math.floor((levelAt(sec, mode) - 1) / n) % 2 === 1; }   // is the sky dark? (Rank: the rules flip too. Classic: decoration only, the rules never change). The Halloween logo is shown when this is true
+// ---- the boss: after level 10, 20, ... a boss takes over one whole phase. During the fight it is always DAY (rules and look): if the clock says night, the fight simply replaces that night, so nothing flips around it ----
 function bossLen(mode) { var M = modeOf(mode), n = M.flip || M.cycle; return M.boss && n ? n * M.lvsec : 0; }                          // seconds a boss fight lasts
-function bossStart(k, mode) { var M = modeOf(mode); return M.boss ? M.boss * M.lvsec * k : Infinity; }                             // boss k arrives at the start of level 20k+1
+function bossStart(k, mode) { var M = modeOf(mode); return M.boss ? M.boss * M.lvsec * k : Infinity; }                             // boss k arrives at the start of level 10k+1
 function bossAt(sec, mode) { var M = modeOf(mode), L = bossLen(mode); if (!L) return 0; var k = Math.floor(sec / (M.boss * M.lvsec)); return k >= 1 && sec - bossStart(k, mode) < L ? k : 0; }   // which boss fight is on (0 = none)
 function bossHp(k, mode) { return Math.round(bossLen(mode) / BOSS_FOOD_GAP * 0.5) + 4 * (k - 1); }                               // every food you catch takes 1 away
 function bossBonus(k) { return 250 * k; }
 function bossXAt(sec, k, mode) { return 0.5 + 0.36 * Math.sin((sec - bossStart(k, mode)) * 0.9 + k); }                          // where the boss floats (0..1 across the screen); its thrown ghosts and pumpkins start there
-function isNight(sec, mode) { var M = modeOf(mode); return !!M.flip && Math.floor((levelAt(sec, mode) - 1) / M.flip) % 2 === 1; }
+function isNight(sec, mode) { var M = modeOf(mode); return !!M.flip && !bossAt(sec, mode) && Math.floor((levelAt(sec, mode) - 1) / M.flip) % 2 === 1; }
 
 // Reversal: at night (flip modes) or for glowing items (mix modes) the rules swap.
 // Normal: catch food, dodge ghosts and pumpkins.  Reversed: catch ghosts and pumpkins, dodge food.
