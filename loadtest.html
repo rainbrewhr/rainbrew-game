@@ -17,8 +17,8 @@ input{font:inherit;width:100%;padding:10px 12px;border-radius:10px;border:2px so
 <div class="card" id="out" hidden><div class="grid" id="stats"></div><p id="verdict"></p><p class="meta" id="note"></p></div>
 <script>
 'use strict';
-/* ===== RULES v6 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
-var RULES_VERSION = 6;
+/* ===== RULES v7 — identical in index.html and Code.gs. Do not edit one without the other. ===== */
+var RULES_VERSION = 7;
 var POINTS = { f: 1, s: 2, p: 2, b: 3, c: 3, t: 4, m: 4 };           // fries, salad, pizza, burger, chicken, tea, matcha (normal rules: catch these)
 var GOODS = ['f', 'f', 's', 'p', 'p', 'b', 'c', 't', 'm'];
 var LOGO_PTS = 25, DBL_MS = 10000, MAGNET_MS = 8000, SLOW_MS = 5000, MAX_MULT = 8;
@@ -53,9 +53,10 @@ function flipSafeAt(mode, tms) { var P = flipLen(mode) * 1000; return !!P && tms
 function isNight(sec, mode) { var M = modeOf(mode); return !!M.flip && Math.floor((levelAt(sec, mode) - 1) / M.flip) % 2 === 1; }
 
 // Reversal: at night (flip modes) or for glowing items (mix modes) the rules swap.
-// Normal: catch food + logo, dodge ghosts and pumpkins.  Reversed: catch ghosts and pumpkins, dodge food and the logo.
+// Normal: catch food, dodge ghosts and pumpkins.  Reversed: catch ghosts and pumpkins, dodge food.
+// The Rainbrew logo is always worth catching: by day it is the normal logo, at night it turns into the Halloween logo.
 function reversedAt(mode, tms, it) { var M = modeOf(mode); if (M.flip) return isNight(tms / 1000, mode); return !!(M.mix && it && it.mx); }
-function hazard(k, rv) { if (k === 'x') return !rv; if (k === 'L' || POINTS[k] !== undefined) return !!rv; return false; }
+function hazard(k, rv) { if (k === 'x') return !rv; if (POINTS[k] !== undefined) return !!rv; return false; }   // the logo ('L') and power-ups are never hazards
 function missable(k, rv) { return k === 'x' ? !!rv : POINTS[k] !== undefined && !rv; }   // a scoring item falling past breaks the combo
 
 // Every item that will ever spawn is decided by the server-issued seed.
