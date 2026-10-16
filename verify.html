@@ -72,7 +72,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 const LS = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 const MODES = [['rank', '🏆 Rank'], ['classic', 'Classic'], ['rush', 'Rush'], ['infinite', 'Infinite']], MODE_NAME = { rank: 'Rank', classic: 'Classic', rush: 'Rush', infinite: 'Infinite' };
-const ERRS = { auth: 'This staff code is wrong or was changed. Ask the game owner for a new one.', locked: 'Too many wrong attempts. Wait 10 minutes.', notfound: 'No score found with that code.', busy: 'The server is busy. Try again in a moment.' };
+const ERRS = { auth: 'That PIN is wrong, or it was changed. Ask the game owner.', locked: 'Too many wrong attempts. Wait 10 minutes.', notfound: 'No score found with that code.', busy: 'The server is busy. Try again in a moment.' };
 const HELP = 'Can’t reach the server. Ask the game owner to check in Apps Script: Deploy → Manage deployments → Edit → “Who has access” must be Anyone, the address must end in /exec, then Version: New version → Deploy.';
 const app = $('app');
 let conn = LS.get('rb_staff', null);
@@ -88,12 +88,12 @@ function decode(str) {                                    // accepts the staff l
     const j = JSON.parse(atob(b));
     if (j && j.k) return { u: SERVER_URL, k: String(j.k) };
   } catch (e) {}
-  if (/^[A-Za-z0-9_\-]{8,64}$/.test(str)) return { u: SERVER_URL, k: str };
+  if (/^\S{6,64}$/.test(str)) return { u: SERVER_URL, k: str };                       // a PIN you chose
   return null;
 }
 function connect(str) {
   const c = decode(str);
-  if (!c) { S.error = 'That doesn’t look like a staff code. Paste the whole code or link.'; render(); return false; }
+  if (!c) { S.error = 'Type your staff PIN (6 or more characters, no spaces).'; render(); return false; }
   conn = c; LS.set('rb_staff', c); S.error = ''; load(); return true;
 }
 function disconnect() { conn = null; LS.set('rb_staff', null); S.rows = []; S.loaded = false; S.status = null; render(); }
@@ -241,10 +241,12 @@ function card(r, rank, prize, open) {
 function renderView() {
   const on = !!conn;
   $('connectView').hidden = on; $('appView').hidden = !on;
-  if (!on) { $('connectView').innerHTML = `<div class="pad center"><h1>Rainbrew staff 🦄</h1><p class="meta">Connect this device once. Open the staff link the owner gave you, or paste the staff code below.</p>
-    <input id="code" placeholder="Paste staff code or link" autocomplete="off" autocapitalize="off"><p class="meta" style="color:var(--bad)">${esc(S.error)}</p><div class="acts"><button data-act="connect">Connect</button></div>
+  if (!on) { $('connectView').innerHTML = `<div class="pad center"><h1>Rainbrew staff 🦄</h1><p class="meta">Enter your staff PIN. This device then stays signed in until you tap Disconnect.</p>
+    <input id="code" type="password" placeholder="Staff PIN" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+    <label class="meta" style="display:flex;gap:8px;align-items:center;justify-content:center;margin:10px 0"><input type="checkbox" id="showpin" style="width:auto;min-height:0"> Show PIN</label>
+    <p class="meta" style="color:var(--bad)">${esc(S.error)}</p><div class="acts"><button data-act="connect">Sign in</button></div>
     ${location.protocol === 'file:' ? '<div class="banner bad" style="text-align:left">⚠️ You opened this page from a <b>downloaded file</b> on your phone. It cannot reach the server that way. Open it from your website address instead (the GitHub page where you uploaded it).</div>' : ''}
-    <div class="card" style="text-align:left"><h2>Where do I get the staff link?</h2><p class="meta">On a computer open your Apps Script project, choose the function <b>showStaffLink</b>, press <b>Run</b>, then copy the link from the <b>Execution log</b>. Send that link to your phone and open it: this page connects by itself, once.</p></div></div>`; return; }
+    <div class="card" style="text-align:left"><h2>Where do I get the PIN?</h2><p class="meta">The game owner chooses it once: in Apps Script, edit the PIN on the marked line of <b>setMyStaffPin</b>, choose that function and press <b>Run</b>. The same PIN then works on every phone and computer. (A staff link or code from <b>showStaffLink</b> also still works: paste it in the box.)</p></div></div>`; return; }
   ['winners', 'comp', 'tools'].forEach(v => { $('v-' + v).hidden = S.view !== v; $('n-' + v).classList.toggle('on', S.view === v); });
 }
 function renderHeader() {
@@ -332,6 +334,7 @@ app.addEventListener('click', e => {
   act(a, b.dataset.code, b.dataset.extra);
 });
 app.addEventListener('input', e => { if (e.target.id === 'q') onSearch(e.target.value); });
+app.addEventListener('change', e => { if (e.target.id === 'showpin') { const c = $('code'); if (c) c.type = e.target.checked ? 'text' : 'password'; } });
 app.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.id === 'code') connect(e.target.value);
   if (e.key === 'Enter' && e.target.id === 'mi') act('mok');
