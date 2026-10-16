@@ -11,7 +11,7 @@ input{font:inherit;width:100%;padding:10px 12px;border-radius:10px;border:2px so
 </style></head><body><main>
 <h1>Load test: how many players can the server take?</h1>
 <p class="meta">Sends pretend players (each asks for a ranked session, plays a few seconds, submits a score) to <b>your</b> server, all at the same moment, and measures what happens. Test scores are tagged <b>TEST</b> and never appear on any leaderboard. Start small (50), then raise it.</p>
-<div class="card"><label for="api">Web app URL (ends in /exec)</label><input id="api" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
+<div class="card"><label for="api">Web app URL (ends in /exec)</label><input id="api" value="https://script.google.com/macros/s/AKfycbzRNgGhHGpnQyWqDysFwVrBCLbAQuw_XaRhMd-BjRNJiahVsb0eHt3NRQotyfrYVG9OkQ/exec" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off">
 <div class="grid"><div><label for="n">Pretend players</label><input id="n" type="number" min="1" max="1000" value="50"></div><div><label for="spread">Spread over (seconds)</label><input id="spread" type="number" min="0" max="60" value="5"></div></div>
 <button id="go">Start test</button></div>
 <div class="card" id="out" hidden><div class="grid" id="stats"></div><p id="verdict"></p><p class="meta" id="note"></p></div>

@@ -291,31 +291,36 @@ function tone(f, d, type, v, to, delay, bus) {
     o.connect(g); g.connect(bus || AU.sfxG); o.start(t0); o.stop(t0 + d + .03);
   } catch (e) {}
 }
-let voiceEl = null, voiceBad = false;
+let voiceEl = null, voiceBad = false, voiceNEl = null, voiceNBad = false;
 function voiceInit() {                                                               // runs on the first tap (phones only allow sound after a touch)
   if (voiceInit.done) return; voiceInit.done = 1;
-  try { if (typeof Audio === 'function') { voiceEl = new Audio('rainbrew-magic.mp3'); voiceEl.preload = 'auto'; voiceEl.addEventListener('error', () => { voiceBad = true; }); } } catch (e) {}   // optional: drop your own recording named rainbrew-magic.mp3 next to index.html
+  try { if (typeof Audio === 'function') { voiceEl = new Audio('rainbrew-magic.mp3'); voiceEl.preload = 'auto'; voiceEl.addEventListener('error', () => { voiceBad = true; }); voiceNEl = new Audio('rainbrew-magic-night.mp3'); voiceNEl.preload = 'auto'; voiceNEl.addEventListener('error', () => { voiceNBad = true; }); } } catch (e) {}   // optional: drop your own recording named rainbrew-magic.mp3 next to index.html
   try { if ('speechSynthesis' in window && typeof SpeechSynthesisUtterance === 'function') { speechSynthesis.getVoices(); const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } } catch (e) {}
 }
-function deepVoice() {                                                               // prefers a man's voice on this phone
-  try {
-    const vs = speechSynthesis.getVoices ? speechSynthesis.getVoices() : [], en = vs.filter(x => /^en/i.test(x.lang));
-    return en.find(x => /\b(male|david|daniel|alex|fred|mark|george|james|guy|ryan|tom|arthur|gordon|lee|oliver|rishi|aaron|google uk english male)\b/i.test(x.name) && !/female/i.test(x.name))
-      || en.find(x => !/female|samantha|zira|karen|moira|susan|hazel|victoria|tessa|fiona|allison|ava|serena|kate|linda|heather|catherine|siri|google us english|google uk english female/i.test(x.name)) || en[0] || null;
-  } catch (e) { return null; }
+function voices() { try { return (speechSynthesis.getVoices ? speechSynthesis.getVoices() : []).filter(x => /^en/i.test(x.lang)); } catch (e) { return []; } }
+function deepVoice() {                                                               // night: prefers a man's voice on this phone
+  const en = voices();
+  return en.find(x => /\b(male|david|daniel|alex|fred|mark|george|james|guy|ryan|tom|arthur|gordon|lee|oliver|rishi|aaron|google uk english male)\b/i.test(x.name) && !/female/i.test(x.name))
+    || en.find(x => !/female|samantha|zira|karen|moira|susan|hazel|victoria|tessa|fiona|allison|ava|serena|kate|linda|heather|catherine|siri|google us english|google uk english female/i.test(x.name)) || en[0] || null;
 }
-function speakMagic() {
+function speakMagic(night) {
   try {
     if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance !== 'function') return;
-    speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance('Rainbrew... Magic!'); u.pitch = .2; u.rate = .7; u.volume = Math.min(1, cfg.sfx + .3);   // very low and slow: a deep, dramatic voice
-    const v = deepVoice(); if (v) u.voice = v;
+    speechSynthesis.cancel();
+    if (night) {                                                                     // NIGHT: a deep, slow man's voice
+      const u = new SpeechSynthesisUtterance('Rainbrew... Magic!'); u.pitch = .2; u.rate = .7; u.volume = Math.min(1, cfg.sfx + .3);
+      const v = deepVoice(); if (v) u.voice = v; speechSynthesis.speak(u); return;
+    }
+    const u = new SpeechSynthesisUtterance('Rainbrew Magic!'); u.pitch = 1.7; u.rate = .85; u.volume = Math.min(1, cfg.sfx + .2);   // DAY: the happy, bright voice
+    const vs = speechSynthesis.getVoices ? speechSynthesis.getVoices() : [], v = vs.find(x => /^en/i.test(x.lang) && /female|samantha|zira|google|karen|moira/i.test(x.name)) || vs.find(x => /^en/i.test(x.lang)); if (v) u.voice = v;
     speechSynthesis.speak(u);
   } catch (e) {}
 }
-function magicVoice() {
+function magicVoice(night) {
   if (cfg.mute || cfg.sfx <= 0) return;
-  try { if (voiceEl && !voiceBad) { voiceEl.volume = Math.min(1, cfg.sfx); voiceEl.currentTime = 0; const p = voiceEl.play(); if (p && p.catch) p.catch(speakMagic); return; } } catch (e) {}
-  speakMagic();
+  const el = night ? voiceNEl : voiceEl, bad = night ? voiceNBad : voiceBad;           // optional recordings: rainbrew-magic.mp3 (day), rainbrew-magic-night.mp3 (night)
+  try { if (el && !bad) { el.volume = Math.min(1, cfg.sfx); el.currentTime = 0; const p = el.play(); if (p && p.catch) p.catch(() => speakMagic(night)); return; } } catch (e) {}
+  speakMagic(night);
 }
 function sfx(n, a) {
   if (!AU.ctx || cfg.mute || cfg.sfx <= 0) return;
@@ -509,7 +514,7 @@ function resolve(o, a) {
     if (S0.rev >= 15) award('night');
   } else if (k === 'L') {
     items.forEach(q => { if (!q.dead && hazard(q.k, reversedAt(mode, tm, q))) { q.dead = 1; burst(q.x, q.y, '#fff'); } });   // everything dangerous on screen right now disappears
-    pop(o.x, o.y, '+' + (S0.score - before)); award('rainbow'); say(rv ? '🎃 RAINBREW MAGIC!' : '🌈 RAINBREW MAGIC!', 1.8); sfx('magic'); magicVoice();   // the shout always wins over the first-time badge pop-up
+    pop(o.x, o.y, '+' + (S0.score - before)); award('rainbow'); say(rv ? '🎃 RAINBREW MAGIC!' : '🌈 RAINBREW MAGIC!', 1.8); sfx('magic'); magicVoice(rv);   // the shout always wins over the first-time badge pop-up; at night (rv) the voice is the deep man's voice
   } else if (k === 'G') { magnetUntil = t + MAGNET_MS / 1000; say('🧲 Magnet!', 1.2); sfx('power'); pwr(); }
   else if (k === 'H') { say('🛡️ Shield ready!', 1.2); sfx('power'); pwr(); }
   else if (k === 'W') { slowUntil = t + SLOW_MS / 1000; say('❄️ Slow-mo!', 1.2); sfx('power'); pwr(); }
@@ -645,7 +650,7 @@ function draw() {
   for (const o of deco) put(EM[o.k], S * .8, o.x, o.y, .55);
   const tmD = Math.floor(t * 1000);
   for (const o of items) {                                                     // no rings or circles: what an item is, is what you see
-    if (o.k === 'L') { const night = reversedAt(mode, tmD, o), im = night ? LIH : LI; if (im.complete && im.naturalWidth) { const zw = S * 1.7; ctx.drawImage(im, o.x - zw / 2, o.y - zw / 2, zw, zw * im.naturalHeight / im.naturalWidth); } else put(night ? '🎃' : '🌈', S, o.x, o.y); }   // normal logo by day, Halloween logo at night
+    if (o.k === 'L') { const night = reversedAt(mode, tmD, o), im = night ? LIH : LI; if (im.complete && im.naturalWidth) { const zw = S * 1.7; ctx.drawImage(im, o.x - zw / 2, o.y - zw / 2, zw, zw * im.naturalHeight / im.naturalWidth); } else put(night ? '🎃' : '🌈', S, o.x, o.y); }   // original logo by day, Halloween logo at night
     else if (o.k === 'x') put(o.ghost ? '👻' : '🎃', S * .9, o.x, o.y);
     else put(EM[o.k], S * (o.pu ? .8 : .9), o.x, o.y);
     if (o.gd) put('✨', S * (.5 + .08 * Math.sin(now / 110)), o.x + S * .36, o.y - S * .36);                    // golden: a sparkle, no ring
