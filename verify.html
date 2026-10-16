@@ -66,7 +66,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,.btn:focus-visible
 </main>
 <script>
 'use strict';
-const STAFF_BUILD = '7.0';
+const STAFF_BUILD = '7.2';
 const SERVER_URL = 'https://script.google.com/macros/s/AKfycbzRNgGhHGpnQyWqDysFwVrBCLbAQuw_XaRhMd-BjRNJiahVsb0eHt3NRQotyfrYVG9OkQ/exec';                         // the game's own server address: the staff page always talks to the same server as the game                                // must match the game and Code.gs: a different number is shown as a warning
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -74,6 +74,7 @@ const LS = { get(k, d) { try { const v = localStorage.getItem(k); return v == nu
 const MODES = [['rank', '🏆 Rank'], ['classic', 'Classic'], ['rush', 'Rush'], ['infinite', 'Infinite']], MODE_NAME = { rank: 'Rank', classic: 'Classic', rush: 'Rush', infinite: 'Infinite' };
 const ERRS = { auth: 'That PIN is wrong, or it was changed. Ask the game owner.', locked: 'Too many wrong attempts. Wait 10 minutes.', notfound: 'No score found with that code.', busy: 'The server is busy. Try again in a moment.' };
 const HELP = 'Can’t reach the server. Ask the game owner to check in Apps Script: Deploy → Manage deployments → Edit → “Who has access” must be Anyone, the address must end in /exec, then Version: New version → Deploy.';
+const relCmp = (a, b) => { const x = String(a || '0').split('.').map(Number), y = String(b || '0').split('.').map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0) ? 1 : -1; } return 0; };   // 7.10 is newer than 7.9
 const app = $('app');
 let conn = LS.get('rb_staff', null);
 if (conn && conn.k && conn.u !== SERVER_URL) { conn = { u: SERVER_URL, k: conn.k }; LS.set('rb_staff', conn); }   // an older staff code may hold an old address: repaired
@@ -258,7 +259,7 @@ function renderHeader() {
 function renderBanner() {
   const el = $('banner'); if (!el) return; const out = [], st = S.status;
   if (S.error) out.push(`<div class="banner bad">${esc(S.error)}${S.netErr ? `<br><button data-act="refresh">Try again</button> <a class="btn" style="background:#fff;color:#222;min-height:44px" href="${esc(SERVER_URL)}?action=ping" target="_blank" rel="noopener">Test the server address</a><div style="font-weight:500;margin-top:8px;font-size:.88rem">Tap “Test the server address”. You should see text starting with <b>{"ok":true</b>. If you see a Google sign-in page or an error, the Apps Script deployment is not set to <b>Who has access: Anyone</b> (or it is not the newest version): Deploy → Manage deployments → Edit → New version → Deploy.</div>` : ''}</div>`);
-  if (st && st.release && st.release !== STAFF_BUILD) out.push(`<div class="banner warn">⚠️ This staff page is v${esc(STAFF_BUILD)} but the server is v${esc(st.release)}. ${st.release > STAFF_BUILD ? 'Reload this page to get the newest version.' : 'Ask the game owner to update <b>Code.gs</b> and deploy a New version.'}</div>`);
+  if (st && st.release && st.release !== STAFF_BUILD) out.push(`<div class="banner warn">⚠️ This staff page is v${esc(STAFF_BUILD)} but the server is v${esc(st.release)}. ${relCmp(st.release, STAFF_BUILD) > 0 ? 'Reload this page to get the newest version.' : 'Ask the game owner to update <b>Code.gs</b> and deploy a New version.'}</div>`);
   el.innerHTML = out.join('');
 }
 function renderTabs() { $('tabs').innerHTML = MODES.concat(S.comp ? [['contest', '🏁 Results']] : []).map(([m, n]) => `<button class="tab${S.mode === m ? ' on' : ''}" role="tab" data-act="mode" data-code="${m}">${n}</button>`).join(''); }
